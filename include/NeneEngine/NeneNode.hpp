@@ -43,6 +43,7 @@ protected:
 class NeneRoot : public NeneNode {
 public:
     int run(); // →.cpp
+    // setupに引数を追加してウィンドウのサイズとかを設定できるようにする
     virtual void setup(); // →.cpp
     virtual void teardown(); // →.cpp
     bool running;
