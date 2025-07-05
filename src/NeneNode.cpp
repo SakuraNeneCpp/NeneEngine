@@ -34,5 +34,5 @@ void NeneNode::pulse_time_lapse(float dt) {
 
 void NeneLeaf::add_child(std::unique_ptr<NeneNode>)
 {
-    std::cerr << "！["+name+"] ねねリーフには子を追加できません。\n";
+    std::cerr << "！["+this->name+"] ねねリーフには子を追加できません。\n";
 }
