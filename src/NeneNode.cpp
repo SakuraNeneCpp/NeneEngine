@@ -45,11 +45,31 @@ void NeneRoot::teardown() {
 }
 
 int NeneRoot::run() {
-    // 1. setup()
-    // 2. イベントパルス送信
-    // 3. レンダラークリア, ビューワールド撮影, スーパー合成, 出力
-    // 4. teardown()
+    // setup
+    setup();
+    // メインループ
+    running = true;
+    while(running) {
+        // イベントパルス送信
+        SDL_Event ev;
+        while(SDL_PollEvent(&ev)) {
+            pulse_sdl_event(&ev);
+        }
+        // ビューワールド撮影
+        // スーパー合成
+        // 出力
+
+        // リフレッシュレート調整(後でちゃんと調整する)
+        SDL_Delay(16);
+    }
+    // teardown
 }
+
+// NeneRoot::handle_sdl_event(SDL_Event ev) {
+//         if (ev.type == SDL_EVENT_QUIT) {
+//         running = false;
+//     }
+// }
 
 
 

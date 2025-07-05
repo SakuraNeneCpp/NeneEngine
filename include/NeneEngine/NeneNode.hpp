@@ -26,7 +26,6 @@ protected:
     bool valve_opening_nene_event = true;
     // ねねサーバ
     std::shared_ptr<NeneServer> nene_server;
-private:
     // 子ノード
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順に並ぶ
     // ツリー生成パルスの前方フック
@@ -44,7 +43,6 @@ private:
 class NeneRoot : public NeneNode {
 public:
     int run(); // →.cpp
-private:
     virtual void setup(); // →.cpp
     virtual void teardown(); // →.cpp
     bool running;
@@ -66,6 +64,6 @@ class NeneGroup : public NeneNode {
 // ねねリーフ
 // 末端のノード
 class NeneLeaf : public NeneNode {
-private:
+protected:
     void add_child(std::unique_ptr<NeneNode>) override final; // →.cppで空実装
 };
