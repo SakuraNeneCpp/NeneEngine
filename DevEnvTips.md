@@ -23,3 +23,21 @@
 ### 4. コミット
 (ここまでローカルでのGitの操作)
 ### 5. プッシュ
+
+## Git / GitHub FAQ
+### 1. 自分のリポジトリなのにプッシュできない
+古いGitHubアカウントが残っている可能性があります. 「コントロールパネル」→「ユーザーアカウント」→「資格情報マネージャー」→「Windowsの資格情報」から古いGitHubアカウントを削除し, VSCodeを再起動してください.
+
+
+### 2. 編集者の名義をPCのユーザー名から変更したい
+Gitではコミットの “Author/Committer” に user.name と user.email が使われます. 未設定のときはOSのユーザー名が自動で入ります. これはGitHub上でコードの編集者として表示されます. 変更するときは以下を実行してください.
+
+``` bash
+# すべてのリポジトリで共通にしたい場合
+git config --global user.name  "Your Name"
+git config --global user.email "you@example.com"
+
+# 今のリポジトリだけ変えたい場合
+git config --local  user.name  "Your Name"
+git config --local  user.email "you@example.com"
+```
