@@ -24,6 +24,8 @@ protected:
     bool valve_opening_sdl_event = true;
     bool valve_opening_time_lapse = true;
     bool valve_opening_nene_event = true;
+    // ねねサーバ
+    std::shared_ptr<NeneServer> nene_server;
 private:
     // 子ノード
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順に並ぶ
@@ -36,37 +38,34 @@ private:
     virtual void handle_nene_event(NeneEvent*) noexcept {};
     // 親子付け
     virtual void add_child(std::unique_ptr<NeneNode>); // →.cpp
-    // ねねサーバ
-    std::shared_ptr<NeneServer> nene_server;
 };
 
 // ねねルート
-class NeneRoot : public NeneNode{
+class NeneRoot : public NeneNode {
 public:
-    // セットアップ
-        // sdl初期化
-        // ねねサーバ立ち上げ
-        // ツリー生成パルス送信
-    virtual void setup(); // →.cpp
-    // メインループ
-        // イベントパルス送信
-        // レンダラークリア, ビューワールド撮影, スーパー合成, 出力
     int run(); // →.cpp
+private:
+    virtual void setup(); // →.cpp
+    virtual void teardown(); // →.cpp
+    bool running;
 };
 
 // ねねスイッチ(子を一つしか持たない)
-class NeneSwitch : public NeneNode{
+class NeneSwitch : public NeneNode {
     void add_child(std::unique_ptr<NeneNode>) override final; // →.cpp
 };
 
-// ねねグループ(複数の子を持つ)
-class NeneGroup : public NeneNode{
-
+// ねねグループ(複数の子を持つ. 子の水門を制御する)
+class NeneGroup : public NeneNode {
+    void valve_close_sdl_event(std::string);
+    void valve_close_time_lapse(std::string);
+    void valve_close_nene_event(std::string);
+    void valve_reset(); // すべての子のすべての水門を開放する
 };
 
 // ねねリーフ
 // 末端のノード
-class NeneLeaf : public NeneNode{
+class NeneLeaf : public NeneNode {
 private:
     void add_child(std::unique_ptr<NeneNode>) override final; // →.cppで空実装
 };

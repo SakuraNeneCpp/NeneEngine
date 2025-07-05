@@ -28,7 +28,28 @@ void NeneNode::pulse_time_lapse(float dt) {
     }
 }
 
+// NeneRoot
+void NeneRoot::setup() {
+    // 1. sdl初期化
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::cerr << "SDL初期化失敗: " << SDL_GetError() << "\n";
+    }
+    // 2. ねねサーバ立ち上げ
+    this->nene_server = std::make_shared<NeneServer>();
+    // 3. ツリー生成パルス送信
+    make_tree();
+}
 
+void NeneRoot::teardown() {
+    // 1. sdl後処理
+}
+
+int NeneRoot::run() {
+    // 1. setup()
+    // 2. イベントパルス送信
+    // 3. レンダラークリア, ビューワールド撮影, スーパー合成, 出力
+    // 4. teardown()
+}
 
 
 
