@@ -23,5 +23,9 @@ public:
 
 class NeneCamera {
 public:
-    void shoot();
+    int x = 0;
+    int y = 0;
+    float scale = 1.0;
+    float rotate = 0;
+    void shoot(NeneViewWorld&, SDL_Renderer&);
 };
