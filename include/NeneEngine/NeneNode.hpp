@@ -43,9 +43,16 @@ protected:
 class NeneRoot : public NeneNode {
 public:
     int run(); // →.cpp
-    // setupに引数を追加してウィンドウのサイズとかを設定できるようにする
-    virtual void setup(); // →.cpp
+    virtual void setup(const char* title, int x, int y, int w, int h, Uint32 flags); // →.cpp
     virtual void teardown(); // →.cpp
+private:
+    SDL_Window* window;
+    SDL_Renderer* renderer;
+    // [C++Tips] 不完全型(opaque struct)
+    // 前方宣言によって, サイズやメンバが不定のまま定義された型.
+    // メモリ領域をどの程度確保すればいいのか不明なので, 実体(値)を定義できない.
+    // クロスプラットフォームを実現するためにSDL_WindowやSDL_Rendererは不完全型で定義されている.
+    // ポインタや参照は扱える.
     bool running;
 };
 

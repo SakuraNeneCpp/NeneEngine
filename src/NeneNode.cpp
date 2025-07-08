@@ -29,11 +29,14 @@ void NeneNode::pulse_time_lapse(float dt) {
 }
 
 // NeneRoot
-void NeneRoot::setup() {
+void NeneRoot::setup(const char *title, int x, int y, int w, int h, Uint32 flags) {
     // 1. sdl初期化
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "SDL初期化失敗: " << SDL_GetError() << "\n";
     }
+    // ウィンドウ生成
+    window = SDL_CreateWindow(title, w, h, flags);
+    SDL_SetWindowPosition(window, x, y);
     // 2. ねねサーバ立ち上げ
     this->nene_server = std::make_shared<NeneServer>();
     // 3. ツリー生成パルス送信
@@ -45,8 +48,6 @@ void NeneRoot::teardown() {
 }
 
 int NeneRoot::run() {
-    // setup
-    setup();
     // メインループ
     running = true;
     while(running) {

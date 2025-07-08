@@ -8,12 +8,10 @@
 
 class NeneServer {
 public:
-    NeneServer(); // 引数を追加する. 引数に基づいて初期化する.
+    NeneServer();
     ~NeneServer();
-    std::shared_ptr<SDL_Window> window;
-    std::shared_ptr<SDL_Renderer> renderer;
-    std::shared_ptr<NeneViewWorld> view_world;
-    std::shared_ptr<NeneCamera> camera;
+    NeneViewWorld view_world;
+    NeneCamera camera;
 };
 
 class NeneViewWorld {
