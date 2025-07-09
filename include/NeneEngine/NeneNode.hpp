@@ -11,7 +11,7 @@
 class NeneNode {
 public:
     std::string name;
-    explicit NeneNode(std::string); // →.cpp
+    explicit NeneNode(std::string);
     virtual ~NeneNode() = default;
 protected:
     // ツリー初期化パルス
@@ -42,8 +42,17 @@ protected:
 // ねねルート
 class NeneRoot : public NeneNode {
 public:
+    // ねねノードとしての名前
+    // ウィンドウの名前
+    // ウィンドウの横幅
+    // ウィンドウの縦幅
+    // ウィンドウのリサイズ設定
+    // ウィンドウ出現位置のx座標
+    // ウィンドウ出現位置のy座標
+    // ウィンドウのアイコン
+    explicit NeneRoot(std::string, const char*, int, int, Uint32, int, int, const char*); // →.cpp
     int run(); // →.cpp
-    virtual void setup(const char* title, int x, int y, int w, int h, Uint32 flags); // →.cpp
+    virtual void setup(const char*, int, int, Uint32 flags, int, int, const char*); // →.cpp
     virtual void teardown(); // →.cpp
 private:
     SDL_Window* window;

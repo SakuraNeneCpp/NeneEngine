@@ -2,8 +2,8 @@
 #include <NeneNode.hpp>
 
 // NeneNode
-NeneNode::NeneNode(std::string s)
-    : name(std::move(s)) {}
+NeneNode::NeneNode(std::string node_name)
+    : name(std::move(node_name)) {}
 
 void NeneNode::make_tree() {
     init_node();
@@ -29,22 +29,34 @@ void NeneNode::pulse_time_lapse(float dt) {
 }
 
 // NeneRoot
-void NeneRoot::setup(const char *title, int x, int y, int w, int h, Uint32 flags) {
-    // 1. sdl初期化
+NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint32 flags, int x, int y, const char* icon_path)
+    : NeneNode(node_name) {
+    // sdl初期化
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << "SDL初期化失敗: " << SDL_GetError() << "\n";
     }
     // ウィンドウ生成
     window = SDL_CreateWindow(title, w, h, flags);
+    // ウィンドウ出現位置調整
     SDL_SetWindowPosition(window, x, y);
-    // 2. ねねサーバ立ち上げ
+    // アイコン画像(.bmp)読み込み
+    SDL_Surface* icon = SDL_LoadBMP(icon_path);
+    // アイコン設定
+    SDL_SetWindowIcon(window, icon);
+    // アイコンサーフェイス破棄
+    SDL_DestroySurface(icon);
+    // レンダラー生成
+    renderer = SDL_CreateRenderer(window, nullptr);
+    // ねねサーバ立ち上げ
     this->nene_server = std::make_shared<NeneServer>();
-    // 3. ツリー生成パルス送信
+    // ツリー生成パルス送信
     make_tree();
 }
 
 void NeneRoot::teardown() {
-    // 1. sdl後処理
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
 }
 
 int NeneRoot::run() {
@@ -56,14 +68,15 @@ int NeneRoot::run() {
         while(SDL_PollEvent(&ev)) {
             pulse_sdl_event(&ev);
         }
+        SDL_RenderClear(renderer);
         // ビューワールド撮影
         // スーパー合成
-        // 出力
+        SDL_RenderPresent(renderer);
 
         // リフレッシュレート調整(後でちゃんと調整する)
         SDL_Delay(16);
     }
-    // teardown
+    return 0;
 }
 
 // NeneRoot::handle_sdl_event(SDL_Event ev) {
