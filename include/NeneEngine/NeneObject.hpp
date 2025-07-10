@@ -7,19 +7,23 @@ class NeneEvent {
 
 class NeneViewObject {
 public:
+    NeneViewObject(); // 作る
     std::string name;
-    std::string file;
+    const char* file_path;
     // スプライトシートにおける位置とサイズ
-    int sprite_x;
-    int sprite_y;
-    int sprite_w;
-    int sprite_h;
+    int src_x;
+    int src_y;
+    int src_w;
+    int src_h;
     // ゲームワールドにおける位置とサイズ
-    int world_x;
-    int world_y;
-    int world_z; // この値の順に描画する
-    int world_w;
-    int world_h;
-    // 表示/非表示
-    bool visible;
+    float dst_x;
+    float dst_y;
+    float dst_z; // この値の順に描画する
+    float dst_w;
+    float dst_h;
+
+    SDL_Texture* tex;
+    // メンバ変数の変化に対応するために毎フレーム計算する
+    SDL_FRect* src_frect();
+    SDL_FRect* dst_frect();
 };
