@@ -57,12 +57,9 @@ public:
 private:
     SDL_Window* window;
     SDL_Renderer* renderer;
-    // [C++Tips] 不完全型(opaque struct)
-    // 前方宣言によって, サイズやメンバが不定のまま定義された型.
-    // メモリ領域をどの程度確保すればいいのか不明なので, 実体(値)を定義できない.
-    // クロスプラットフォームを実現するためにSDL_WindowやSDL_Rendererは不完全型で定義されている.
-    // ポインタや参照は扱える.
     bool running;
+    // イベントパルスの前方フック
+    virtual void handle_sdl_event(const SDL_Event&) noexcept override;
 };
 
 // ねねスイッチ(子を一つしか持たない)
@@ -75,7 +72,7 @@ class NeneGroup : public NeneNode {
     void valve_close_sdl_event(std::string);
     void valve_close_time_lapse(std::string);
     void valve_close_nene_event(std::string);
-    void valve_reset(); // すべての子のすべての水門を開放する
+    void valve_open_all(); // すべての子のすべての水門を開放する
 };
 
 // ねねリーフ

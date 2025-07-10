@@ -14,7 +14,7 @@ void NeneNode::make_tree() {
     }
 }
 
-void NeneNode::pulse_sdl_event(SDL_Event* ev) {
+void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
     if (!valve_opening_sdl_event) return;
     handle_sdl_event(ev);
     for (auto &kv : children) {
@@ -22,7 +22,7 @@ void NeneNode::pulse_sdl_event(SDL_Event* ev) {
     }
 }
 
-void NeneNode::pulse_time_lapse(float dt) {
+void NeneNode::pulse_time_lapse(const float& dt) {
     if (!valve_opening_sdl_event) return;
     handle_time_lapse(dt);
     for (auto &kv : children) {
@@ -32,11 +32,6 @@ void NeneNode::pulse_time_lapse(float dt) {
 
 // NeneRoot
 NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint32 flags, int x, int y, const char* icon_path)
-    // [C++Tips] メンバ初期化リストの必要性
-    // クラスAを継承しているクラスBを生成するとき, 以下が順に実行される.
-    // Aのコンストラクタを実行 → Bのメンバを初期化 → Bのコンストラクタを実行.
-    // もしAにデフォルトコンストラクタが無い場合, Bで明示的にAのコンストラクタを呼び出す必要がある.
-    // このとき, Bのコンストラクタよりも前にAを初期化する必要があるため, メンバ初期化リストでしかこれを行えない.
     : NeneNode(node_name) {
     // sdl初期化
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -78,7 +73,7 @@ int NeneRoot::run() {
         // イベントパルス送信
         SDL_Event ev;
         while(SDL_PollEvent(&ev)) {
-            pulse_sdl_event(&ev);
+            pulse_sdl_event(ev);
         }
         SDL_RenderClear(renderer);
         // ビューワールド撮影
@@ -92,11 +87,11 @@ int NeneRoot::run() {
     return 0;
 }
 
-// NeneRoot::handle_sdl_event(SDL_Event ev) {
-//         if (ev.type == SDL_EVENT_QUIT) {
-//         running = false;
-//     }
-// }
+void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
+    if (ev.type == SDL_EVENT_QUIT) {
+        running = false;
+    }
+}
 
 
 
