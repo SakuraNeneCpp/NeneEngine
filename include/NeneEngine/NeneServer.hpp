@@ -35,7 +35,6 @@ public:
     float rotate = 0;
     // viewのオブジェクトうち, 領域が描画領域に重なっているものをfilmに登録する
     void shoot();
-private:
 };
 
 class AssetLoader {
@@ -78,13 +77,12 @@ private:
     std::unordered_map<std::string, SDL_Texture*> cache_; // キャッシュ. パスをキーとして, 読み込み済みテクスチャを値に持つ辞書
 };
 
-// 「文字列 + フォントサイズ」などをキーにしてテクスチャをキャッシュするための struct
 struct FontKey {
     std::string text;
     int fontSize;
     SDL_Color color;
     // 等号演算子オーバーロード
-    // 文字列, サイズ, 色がすべて等しいときこれらのフォントは等しいとする.
+    // 文字列, サイズ, 色がすべて等しいとき, これらのテキストテクスチャは等しいとする.
     bool operator==(FontKey const& o) const {
         return text == o.text
             && fontSize == o.fontSize
@@ -118,8 +116,8 @@ public:
     SDL_Texture* get_text_texture(const std::string& fontPath, int fontSize, const std::string& text, SDL_Color color);
 private:
     SDL_Renderer* renderer_;
-    // フォントキャッシュ: <"パス, サイズ", TTF_Font*>
+    // フォントキャッシュ
     std::unordered_map<std::string, TTF_Font*> fontCache_;
-    // 文字列テクスチャキャッシュ: <FontKey, SDL_Texture*>
+    // 文字列テクスチャキャッシュ
     std::unordered_map<FontKey, SDL_Texture*, FontKeyHash> textCache_;
 };
