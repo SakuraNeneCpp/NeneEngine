@@ -20,4 +20,6 @@ public:
     int world_z; // この値の順に描画する
     int world_w;
     int world_h;
+    // 表示/非表示
+    bool visible;
 };

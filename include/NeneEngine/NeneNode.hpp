@@ -31,11 +31,11 @@ protected:
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順に並ぶ
     // ツリー生成パルスの前方フック
     // サービス取得, キャラクターの配置など, 子ノード生成・親子付け
-    virtual void init_node() noexcept {};
+    virtual void init_node() {};
     // イベントパルスの前方フック
-    virtual void handle_sdl_event(const SDL_Event&) noexcept {};
-    virtual void handle_time_lapse(const float&) noexcept {};
-    virtual void handle_nene_event(const NeneEvent&) noexcept {};
+    virtual void handle_sdl_event(const SDL_Event&) {};
+    virtual void handle_time_lapse(const float&) {};
+    virtual void handle_nene_event(const NeneEvent&) {};
     // 親子付け
     virtual void add_child(std::unique_ptr<NeneNode>); // →.cpp
 };
@@ -59,7 +59,7 @@ private:
     SDL_Renderer* renderer;
     bool running;
     // イベントパルスの前方フック
-    virtual void handle_sdl_event(const SDL_Event&) noexcept override;
+    virtual void handle_sdl_event(const SDL_Event&) override;
 };
 
 // ねねスイッチ(子を一つしか持たない)

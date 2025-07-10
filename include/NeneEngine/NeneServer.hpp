@@ -16,11 +16,15 @@ public:
 
 class NeneViewWorld {
 public:
-    std::map<int, NeneViewObject> objects;
+    void addObject(NeneViewObject&);
+    std::map<int, NeneViewObject&> objects;
 };
 
 class NeneCamera {
 public:
+    NeneCamera(SDL_Renderer&);
+    int w;
+    int h;
     int x = 0;
     int y = 0;
     float scale = 1.0;
