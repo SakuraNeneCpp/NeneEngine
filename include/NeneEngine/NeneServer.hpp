@@ -83,6 +83,8 @@ struct FontKey {
     std::string text;
     int fontSize;
     SDL_Color color;
+    // 等号演算子オーバーロード
+    // 文字列, サイズ, 色がすべて等しいときこれらのフォントは等しいとする.
     bool operator==(FontKey const& o) const {
         return text == o.text
             && fontSize == o.fontSize
@@ -109,23 +111,15 @@ public:
     // コンストラクタで SDL_Renderer と TTF_Init を行う
     explicit FontLoader(SDL_Renderer* renderer);
     ~FontLoader();
-
     // 指定パスのフォントファイルを指定サイズでロードし TTF_Font* を返す
     // (すでに同じパス・サイズでロード済みなら、キャッシュを返す)
     TTF_Font* get_font(const std::string& fontPath, int fontSize);
-
     // 指定文字列をテクスチャ化して返す (フォントパス＋サイズ＋文字列＋色)
-    SDL_Texture* get_text_texture(const std::string& fontPath,
-                                  int fontSize,
-                                  const std::string& text,
-                                  SDL_Color color);
-
+    SDL_Texture* get_text_texture(const std::string& fontPath, int fontSize, const std::string& text, SDL_Color color);
 private:
     SDL_Renderer* renderer_;
-
     // フォントキャッシュ: <"パス, サイズ", TTF_Font*>
     std::unordered_map<std::string, TTF_Font*> fontCache_;
-
     // 文字列テクスチャキャッシュ: <FontKey, SDL_Texture*>
     std::unordered_map<FontKey, SDL_Texture*, FontKeyHash> textCache_;
 };
