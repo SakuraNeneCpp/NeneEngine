@@ -40,15 +40,14 @@ private:
 
 class AssetLoader {
 public:
-    // コンストラクタ：SDL_Renderer の参照を受け取る
     explicit AssetLoader(SDL_Renderer* renderer)
      : renderer_(renderer) {
         if (!renderer_) {
             throw std::runtime_error("AssetLoader: renderer is null");
         }
     }
-    // デストラクタ：キャッシュにあるすべてのテクスチャを破棄
     ~AssetLoader() {
+        // キャッシュ内のテクスチャをすべて破棄
         for (auto& [path, tex] : cache_) {
             if (tex) {
                 SDL_DestroyTexture(tex);
@@ -56,8 +55,8 @@ public:
         }
         cache_.clear();
     }
-    // 指定パスのテクスチャを返す。キャッシュにあれば再利用し、
-    // なければ IMG_LoadTexture で読み込んでキャッシュに登録する。
+    // 指定パスのテクスチャを返す. キャッシュにあれば再利用し,
+    // なければ IMG_LoadTexture で読み込んでキャッシュに登録する.
     SDL_Texture* get_texture(const std::string& path) {
         // 1. キャッシュに存在するかチェック
         auto it = cache_.find(path);
@@ -67,7 +66,7 @@ public:
         // 2. キャッシュにない場合はディスクからロード
         SDL_Texture* tex = IMG_LoadTexture(renderer_, path.c_str());
         if (!tex) {
-            throw std::runtime_error(std::string("AssetLoader: Failed to load texture '") + path + "': " + SDL_GetError());
+            throw std::runtime_error(std::string("![AssetLoader] 画像の読み込みに失敗しました '") + path + "': " + SDL_GetError());
         }
         // 3. キャッシュに登録して返却
         cache_.emplace(path, tex);
@@ -84,7 +83,6 @@ struct FontKey {
     std::string text;
     int fontSize;
     SDL_Color color;
-
     bool operator==(FontKey const& o) const {
         return text == o.text
             && fontSize == o.fontSize
@@ -125,7 +123,7 @@ public:
 private:
     SDL_Renderer* renderer_;
 
-    // フォントキャッシュ: <"パス#サイズ", TTF_Font*>
+    // フォントキャッシュ: <"パス, サイズ", TTF_Font*>
     std::unordered_map<std::string, TTF_Font*> fontCache_;
 
     // 文字列テクスチャキャッシュ: <FontKey, SDL_Texture*>
