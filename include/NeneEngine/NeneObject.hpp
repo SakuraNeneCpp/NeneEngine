@@ -1,6 +1,7 @@
 // 依存性グループC: NeneObject
 #pragma once
 #include <string>
+#include <SDL3/SDL.h>
 
 class NeneEvent {
 };
