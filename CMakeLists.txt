@@ -12,9 +12,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# (Optional) nice for IDEs
-set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-
 # ----------------------------
 # SDL3 dependencies
 # ----------------------------
@@ -77,13 +74,6 @@ target_link_libraries(NeneEngineLib
     ${SDL3_IMAGE_LIB}
     ${SDL3_TTF_LIB}
 )
-
-# Warnings (optional)
-if(MSVC)
-  target_compile_options(NeneEngineLib PRIVATE /W4)
-else()
-  target_compile_options(NeneEngineLib PRIVATE -Wall -Wextra -Wpedantic)
-endif()
 
 # ----------------------------
 # ChromeDino executable
