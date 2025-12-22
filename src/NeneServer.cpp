@@ -3,14 +3,6 @@
 #include <SDL3_image/SDL_image.h>
 #include <NeneServer.hpp>
 
-void NeneCamera::shoot() {
-    // オブジェクトのうち, 領域が描画領域に重なっているものをレンダラー登録する
-    for (auto &kv : view.objects) {
-        NeneViewObject& object = kv.second;
-        SDL_RenderTexture(&film, object.tex, object.src_frect(), object.dst_frect());
-    }
-}
-
 
 
 FontLoader::FontLoader(SDL_Renderer* renderer)

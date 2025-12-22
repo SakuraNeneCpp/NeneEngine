@@ -5,7 +5,6 @@
 #include <map>
 #include <SDL3/SDL.h>
 #include <NeneServer.hpp>
-#include <NeneObject.hpp>
 
 // ねねノード(基底クラス)
 class NeneNode {
@@ -20,13 +19,16 @@ protected:
     // 読み取り専用参照渡し(const T&)
     void pulse_sdl_event(const SDL_Event&); // →.cpp
     void pulse_time_lapse(const float&); // →.cpp
-    void pulse_nene_event(const NeneEvent&); // →.cpp
-    // イベントパルスの水門
+    void pulse_nene_mail(const NeneMail&); // →.cpp
+    void pulse_render(SDL_Renderer*);
+    // 水門(パルスを遮断する)
     bool valve_opening_sdl_event = true;
     bool valve_opening_time_lapse = true;
     bool valve_opening_nene_event = true;
-    // ねねサーバ
-    std::shared_ptr<NeneServer> nene_server;
+    // ねねサーバ共有
+    std::shared_ptr<MailServer> mail_server;
+    std::shared_ptr<AssetLoader> asset_loader;
+    std::shared_ptr<FontLoader> font_loader;
     // 子ノード
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順に並ぶ
     // ツリー生成パルスの前方フック
@@ -35,7 +37,7 @@ protected:
     // イベントパルスの前方フック
     virtual void handle_sdl_event(const SDL_Event&) {};
     virtual void handle_time_lapse(const float&) {};
-    virtual void handle_nene_event(const NeneEvent&) {};
+    virtual void handle_nene_event(const NeneMail&) {};
     // 親子付け
     virtual void add_child(std::unique_ptr<NeneNode>); // →.cpp
 };
@@ -60,24 +62,4 @@ private:
     bool running;
     // イベントパルスの前方フック
     virtual void handle_sdl_event(const SDL_Event&) override;
-};
-
-// ねねスイッチ(子を一つしか持たない)
-class NeneSwitch : public NeneNode {
-    void add_child(std::unique_ptr<NeneNode>) override final; // →.cpp
-};
-
-// ねねグループ(複数の子を持つ. 子の水門を制御する)
-class NeneGroup : public NeneNode {
-    void valve_close_sdl_event(std::string);
-    void valve_close_time_lapse(std::string);
-    void valve_close_nene_event(std::string);
-    void valve_open_all(); // すべての子のすべての水門を開放する
-};
-
-// ねねリーフ
-// 末端のノード
-class NeneLeaf : public NeneNode {
-protected:
-    void add_child(std::unique_ptr<NeneNode>) override final; // →.cppで空実装
 };

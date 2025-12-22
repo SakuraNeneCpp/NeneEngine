@@ -7,34 +7,13 @@
 #include <stdexcept>
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
-#include <NeneObject.hpp>
 
-class NeneServer {
-public:
-    NeneServer(SDL_Renderer*);
-    ~NeneServer();
-    NeneViewWorld view_world;
-    NeneCamera camera;
+class NeneMail{
+
 };
 
-class NeneViewWorld {
-public:
-    void addObject(NeneViewObject&);
-    // z軸の順
-    std::map<int, NeneViewObject&> objects;
-};
+class MailServer{
 
-class NeneCamera {
-public:
-    NeneCamera(NeneViewWorld&, SDL_Renderer&);
-    SDL_Renderer& film;
-    NeneViewWorld& view;
-    int x = 0;
-    int y = 0;
-    float scale = 1.0;
-    float rotate = 0;
-    // viewのオブジェクトうち, 領域が描画領域に重なっているものをfilmに登録する
-    void shoot();
 };
 
 class AssetLoader {

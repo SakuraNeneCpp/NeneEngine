@@ -54,7 +54,9 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
     // レンダラー生成
     renderer = SDL_CreateRenderer(window, nullptr);
     // ねねサーバ立ち上げ
-    this->nene_server = std::make_shared<NeneServer>();
+    this->mail_server = std::make_shared<MailServer>();
+    this->asset_loader = std::make_shared<AssetLoader>();
+    this->font_loader = std::make_shared<FontLoader>();
     // ツリー生成パルス送信
     make_tree();
 }
@@ -91,10 +93,4 @@ void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
     if (ev.type == SDL_EVENT_QUIT) {
         running = false;
     }
-}
-
-
-
-void NeneLeaf::add_child(std::unique_ptr<NeneNode>) {
-    std::cerr << "！["+this->name+"] ねねリーフには子を追加できません.\n";
 }
