@@ -1,28 +1,29 @@
-// ChromeDino/game.cpp
+// game.cpp
 #include <memory>
 #include <NeneEngine/NeneNode.hpp>
 
-// いまは「ウィンドウを立ち上げるだけ」なので中身は空でOK
-class ChromeDinoGame final : public NeneRoot {
+class Game final : public NeneRoot {
 public:
-    ChromeDinoGame()
+    Game()
     : NeneRoot(
-        "game",                         // ルートノード名
-        "Chrome Dino (NeneEngine)",     // ウィンドウタイトル
-        960, 540,                       // w, h
-        SDL_WINDOW_RESIZABLE,           // flags
-        100, 100,                       // x, y（まず固定でOK）
-        ""                              // icon_path（空ならスキップ）
+        "game",                 // NeneNodeとしての名前
+        "Game Title",           // ウィンドウタイトル
+        960, 540,               // 横幅, 縦幅
+        SDL_WINDOW_RESIZABLE,   // リサイズ設定 (ウィンドウの端をつかんでサイズを変えられるかどうか. 今はできるようになってる)
+        100, 100,               // ウィンドウ出現位置
+        ""                      // アイコン画像へのパス (空ならスキップされる)
       )
     {}
 
 protected:
     void init_node() override {
-        // TODO: 次の段階で scene_switch / play_scene / dino / ui_canvas / score などを add_child します
+        // ここで子ノードを生成する
+        // いまはウィンドウを生成するだけなので何もしない
     }
 };
 
 // main.cpp から呼ぶためのファクトリ関数
+// main.cpp で生成してもいいけど, 結合を疎にするためにこう書く方が理想的
 std::unique_ptr<NeneRoot> create_game() {
-    return std::make_unique<ChromeDinoGame>();
+    return std::make_unique<Game>();
 }

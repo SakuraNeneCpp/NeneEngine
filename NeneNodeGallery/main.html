@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NeneNode Gallery</title>
+  <meta name="color-scheme" content="light dark" />
+  <style>
+    :root{
+      /* GitHub-ish page */
+      --bg: #ffffff;
+      --fg: #1f2328;
+      --muted: #57606a;
+      --border: #d0d7de;
+      --link: #0969da;
+
+      /* ChatGPT-ish code block */
+      --code-bg: #0b0f14;
+      --code-fg: #e6edf3;
+      --code-muted: #8b949e;
+      --code-border: rgba(255,255,255,.08);
+      --btn-bg: rgba(255,255,255,.08);
+      --btn-hover: rgba(255,255,255,.14);
+      --btn-fg: #e6edf3;
+
+      --shadow: 0 1px 0 rgba(27,31,36,.04);
+      --radius: 12px;
+      --radius-sm: 10px;
+    }
+
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg: #0d1117;
+        --fg: #e6edf3;
+        --muted: #9da7b1;
+        --border: #30363d;
+        --link: #2f81f7;
+
+        --code-bg: #0b0f14;
+        --code-fg: #e6edf3;
+        --code-muted: #9da7b1;
+        --code-border: rgba(255,255,255,.08);
+      }
+    }
+
+    *{ box-sizing: border-box; }
+    html,body{ height: 100%; }
+    body{
+      margin:0;
+      font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+    }
+
+    a{ color: var(--link); text-decoration: none; }
+    a:hover{ text-decoration: underline; }
+
+    .page{
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 28px 16px 64px;
+    }
+
+    header{
+      margin-bottom: 18px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1{
+      margin: 0 0 6px;
+      font-size: 28px;
+      line-height: 1.25;
+      letter-spacing: .2px;
+    }
+    .sub{
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .toolbar{
+      display:flex;
+      gap: 10px;
+      align-items:center;
+      margin: 16px 0 20px;
+      flex-wrap: wrap;
+    }
+    .search{
+      flex: 1 1 260px;
+      min-width: 240px;
+      position: relative;
+    }
+    .search input{
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--fg);
+      outline: none;
+    }
+    .search input:focus{
+      border-color: color-mix(in srgb, var(--link) 55%, var(--border));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 20%, transparent);
+    }
+
+    .pillbar{
+      display:flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .pill{
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .pill[data-active="true"]{
+      color: var(--fg);
+      border-color: color-mix(in srgb, var(--link) 45%, var(--border));
+      background: color-mix(in srgb, var(--link) 10%, transparent);
+    }
+
+    .list{
+      display:flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .snippet{
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: color-mix(in srgb, var(--bg) 92%, #ffffff);
+      box-shadow: var(--shadow);
+    }
+
+    .snippet-head{
+      padding: 14px 14px 10px;
+      display:flex;
+      gap: 12px;
+      align-items:flex-start;
+      justify-content: space-between;
+    }
+
+    .meta{
+      min-width: 0;
+    }
+    .title{
+      margin: 0 0 2px;
+      font-size: 16px;
+      line-height: 1.3;
+      font-weight: 650;
+      word-break: break-word;
+    }
+    .desc{
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tags{
+      margin-top: 8px;
+      display:flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .tag{
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: transparent;
+    }
+
+    /* Code block like ChatGPT */
+    .code-wrap{
+      background: var(--code-bg);
+      color: var(--code-fg);
+      border-top: 1px solid var(--border);
+      position: relative;
+    }
+
+    .code-topbar{
+      display:flex;
+      justify-content: space-between;
+      align-items:center;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--code-border);
+      gap: 10px;
+    }
+
+    .lang{
+      font-size: 12px;
+      color: var(--code-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      letter-spacing: .2px;
+    }
+
+    .actions{
+      display:flex;
+      gap: 8px;
+      align-items:center;
+    }
+
+    .btn{
+      border: 1px solid var(--code-border);
+      background: var(--btn-bg);
+      color: var(--btn-fg);
+      border-radius: 10px;
+      padding: 7px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      display:inline-flex;
+      gap: 8px;
+      align-items:center;
+      user-select:none;
+    }
+    .btn:hover{ background: var(--btn-hover); }
+    .btn:active{ transform: translateY(1px); }
+    .btn:focus{
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(47,129,247,.25);
+    }
+
+    .btn svg{
+      width: 14px;
+      height: 14px;
+      opacity: .95;
+    }
+
+    pre{
+      margin: 0;
+      padding: 14px 14px 16px;
+      overflow: auto;
+    }
+
+    code{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      tab-size: 2;
+      white-space: pre;
+    }
+
+    .empty{
+      display:none;
+      padding: 22px 14px;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      text-align:center;
+    }
+
+    footer{
+      margin-top: 26px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <header>
+      <h1>NeneNodeGallery</h1>
+      <p class="sub">ねねノードのテンプレートとか</p>
+    </header>
+
+    <div class="toolbar" role="region" aria-label="フィルター">
+      <div class="search">
+        <input id="q" type="search" placeholder="検索（タイトル・説明・タグ）…" autocomplete="off" />
+      </div>
+      <div class="pillbar" id="pillbar" aria-label="タグ絞り込み">
+        <span class="pill" data-tag="all" data-active="true">All</span>
+        <span class="pill" data-tag="cpp">C++</span>
+        <span class="pill" data-tag="node">Node</span>
+        <span class="pill" data-tag="utility">Utility</span>
+        <span class="pill" data-tag="others">Others</span>
+      </div>
+    </div>
+
+    <div id="empty" class="empty">該当するスニペットが見つかりませんでした…</div>
+
+    <main class="list" id="list">
+
+      <!-- スニペットのテンプレ-->
+      <article class="snippet" data-tags="others">
+        <div class="snippet-head">
+          <div class="meta">
+            <h2 class="title">開発環境構築</h2>
+            <p class="desc"></p>
+            <div class="tags" aria-label="タグ">
+              <span class="tag">others</span>
+            </div>
+          </div>
+        </div>
+        <div class="code-wrap">
+          <div class="code-topbar">
+            <span class="lang">txt</span>
+            <div class="actions">
+              <button class="btn copy" type="button" aria-label="コードをコピー">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Z" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M6 20H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.7" opacity=".85"/>
+                </svg>
+                <span class="label">Copy</span>
+              </button>
+            </div>
+          </div>
+          <pre><code class="code" data-language="txt">あとで書く</code></pre>
+        </div>
+      </article>
+
+      <article class="snippet" data-tags="others">
+        <div class="snippet-head">
+          <div class="meta">
+            <h2 class="title">フォルダ構成</h2>
+            <p class="desc"></p>
+            <div class="tags" aria-label="タグ">
+              <span class="tag">others</span>
+            </div>
+          </div>
+        </div>
+        <div class="code-wrap">
+          <div class="code-topbar">
+            <span class="lang">txt</span>
+            <div class="actions">
+              <button class="btn copy" type="button" aria-label="コードをコピー">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Z" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M6 20H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.7" opacity=".85"/>
+                </svg>
+                <span class="label">Copy</span>
+              </button>
+            </div>
+          </div>
+          <pre><code class="code" data-language="txt">あとで書く</code></pre>
+        </div>
+      </article>
+
+      <article class="snippet" data-tags="others">
+        <div class="snippet-head">
+          <div class="meta">
+            <h2 class="title">CMake</h2>
+            <p class="desc"></p>
+            <div class="tags" aria-label="タグ">
+              <span class="tag">others</span>
+            </div>
+          </div>
+        </div>
+        <div class="code-wrap">
+          <div class="code-topbar">
+            <span class="lang">CMake</span>
+            <div class="actions">
+              <button class="btn copy" type="button" aria-label="コードをコピー">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Z" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M6 20H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.7" opacity=".85"/>
+                </svg>
+                <span class="label">Copy</span>
+              </button>
+            </div>
+          </div>
+          <pre><code class="code" data-language="txt">あとで書く</code></pre>
+        </div>
+      </article>
+
+      <article class="snippet" data-tags="others">
+        <div class="snippet-head">
+          <div class="meta">
+            <h2 class="title">ビルドと実行のコマンド</h2>
+            <p class="desc"></p>
+            <div class="tags" aria-label="タグ">
+              <span class="tag">others</span>
+            </div>
+          </div>
+        </div>
+        <div class="code-wrap">
+          <div class="code-topbar">
+            <span class="lang">PowerShell</span>
+            <div class="actions">
+              <button class="btn copy" type="button" aria-label="コードをコピー">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Z" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M6 20H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.7" opacity=".85"/>
+                </svg>
+                <span class="label">Copy</span>
+              </button>
+            </div>
+          </div>
+          <pre><code class="code" data-language="txt">(ルート直下で以下を実行)
+(CMakeLists.txtを更新したらここからやり直す)
+
+cmake -S . -B build -G "Visual Studio 17 2022"  -A x64  -DCMAKE_TOOLCHAIN_FILE=C:/Users/**/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+(ゲームのコードを更新したらここからやり直す)
+
+cmake --build build -j
+.\build\Debug\Game.exe</code></pre>
+        </div>
+      </article>
+
+      <article class="snippet" data-tags="cpp node">
+        <div class="snippet-head">
+          <div class="meta">
+            <h2 class="title">エントリポイント</h2>
+            <p class="desc"></p>
+            <div class="tags">
+              <span class="tag">cpp</span>
+              <span class="tag">node</span>
+            </div>
+          </div>
+        </div>
+        <div class="code-wrap">
+          <div class="code-topbar">
+            <span class="lang">C++</span>
+            <div class="actions">
+              <button class="btn copy" type="button" aria-label="コードをコピー">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Z" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M6 20H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.7" opacity=".85"/>
+                </svg>
+                <span class="label">Copy</span>
+              </button>
+            </div>
+          </div>
+          <pre><code class="code" data-language="cpp">// main.cpp
+#include &lt;memory&gt;
+#include &lt;SDL3/SDL_main.h&gt;
+#include &lt;NeneEngine/NeneNode.hpp&gt;
+
+// ゲームを生成
+// create_game() については game.cpp を参照
+std::unique_ptr&lt;NeneRoot&gt; create_game();
+
+int main(int, char**) {
+    auto game = create_game();
+    return game->run();
+}</code></pre>
+        </div>
+      </article>
+
+      <article class="snippet" data-tags="cpp node">
+        <div class="snippet-head">
+          <div class="meta">
+            <h2 class="title">ウィンドウを出すだけのゲーム</h2>
+            <p class="desc"></p>
+            <div class="tags">
+              <span class="tag">cpp</span>
+              <span class="tag">node</span>
+            </div>
+          </div>
+        </div>
+        <div class="code-wrap">
+          <div class="code-topbar">
+            <span class="lang">C++</span>
+            <div class="actions">
+              <button class="btn copy" type="button" aria-label="コードをコピー">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Z" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M6 20H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h1" stroke="currentColor" stroke-width="1.7" opacity=".85"/>
+                </svg>
+                <span class="label">Copy</span>
+              </button>
+            </div>
+          </div>
+          <pre><code class="code" data-language="cmake">// game.cpp
+#include &lt;memory&gt;
+#include &lt;NeneEngine/NeneNode.hpp&gt;
+
+class Game final : public NeneRoot {
+public:
+    Game()
+    : NeneRoot(
+        "game",                 // NeneNodeとしての名前
+        "Game Title",           // ウィンドウタイトル
+        960, 540,               // 横幅, 縦幅
+        SDL_WINDOW_RESIZABLE,   // リサイズ設定 (ウィンドウの端をつかんでサイズを変えられるかどうか. 今はできるようになってる)
+        100, 100,               // ウィンドウ出現位置
+        ""                      // アイコン画像へのパス (空ならスキップされる)
+      )
+    {}
+
+protected:
+    void init_node() override {
+        // ここで子ノードを生成する
+        // いまはウィンドウを生成するだけなので何もしない
+    }
+};
+
+// main.cpp から呼ぶためのファクトリ関数
+// main.cpp で生成してもいいけど, 結合を疎にするためにこう書く方が理想的
+std::unique_ptr&lt;NeneRoot&gt; create_game() {
+    return std::make_unique&lt;Game&gt;();
+}
+</code></pre>
+        </div>
+      </article>
+      <!-- ここまで -->
+
+    </main>
+
+    <footer>
+      追加方法：&lt;article class="snippet"&gt; を丸ごと複製して、data-tags と本文を更新してください。
+    </footer>
+  </div>
+
+  <script>
+    (function(){
+      const q = document.getElementById('q');
+      const list = document.getElementById('list');
+      const empty = document.getElementById('empty');
+      const pillbar = document.getElementById('pillbar');
+
+      let activeTag = 'all';
+
+      function normalize(s){ return (s || '').toLowerCase(); }
+
+      function getTextForSnippet(snippet){
+        const title = snippet.querySelector('.title')?.textContent ?? '';
+        const desc  = snippet.querySelector('.desc')?.textContent ?? '';
+        const tags  = snippet.getAttribute('data-tags') ?? '';
+        return normalize(title + ' ' + desc + ' ' + tags);
+      }
+
+      function matches(snippet){
+        const query = normalize(q.value.trim());
+        const tags = (snippet.getAttribute('data-tags') || '').split(/\s+/).filter(Boolean);
+
+        const okTag = (activeTag === 'all') ? true : tags.includes(activeTag);
+        const okQ = query === '' ? true : getTextForSnippet(snippet).includes(query);
+
+        return okTag && okQ;
+      }
+
+      function applyFilter(){
+        const items = Array.from(list.querySelectorAll('.snippet'));
+        let shown = 0;
+        for(const it of items){
+          const ok = matches(it);
+          it.style.display = ok ? '' : 'none';
+          if(ok) shown++;
+        }
+        empty.style.display = (shown === 0) ? 'block' : 'none';
+      }
+
+      // Copy buttons
+      async function copyText(text){
+        // Prefer Clipboard API
+        if(navigator.clipboard && window.isSecureContext){
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+
+      function decodeHtmlEntities(s){
+        const t = document.createElement('textarea');
+        t.innerHTML = s;
+        return t.value;
+      }
+
+      list.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button.copy');
+        if(!btn) return;
+
+        const wrap = btn.closest('.code-wrap');
+        const code = wrap?.querySelector('code.code');
+        if(!code) return;
+
+        const raw = code.innerHTML; // may include &lt; etc
+        const text = decodeHtmlEntities(raw).replace(/\n$/, '');
+
+        const label = btn.querySelector('.label');
+        const old = label ? label.textContent : 'Copy';
+
+        try{
+          await copyText(text);
+          if(label) label.textContent = 'Copied!';
+          btn.setAttribute('data-copied', 'true');
+          setTimeout(() => {
+            if(label) label.textContent = old;
+            btn.removeAttribute('data-copied');
+          }, 1200);
+        }catch(err){
+          if(label) label.textContent = 'Failed';
+          setTimeout(() => { if(label) label.textContent = old; }, 1200);
+          console.error(err);
+        }
+      });
+
+      // Search
+      q.addEventListener('input', applyFilter);
+
+      // Tag pills
+      pillbar.addEventListener('click', (e) => {
+        const pill = e.target.closest('.pill');
+        if(!pill) return;
+        const tag = pill.getAttribute('data-tag');
+        if(!tag) return;
+
+        activeTag = tag;
+
+        for(const el of pillbar.querySelectorAll('.pill')){
+          el.setAttribute('data-active', (el.getAttribute('data-tag') === activeTag) ? 'true' : 'false');
+        }
+        applyFilter();
+      });
+
+      applyFilter();
+    })();
+  </script>
+</body>
+</html>
