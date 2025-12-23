@@ -12,6 +12,17 @@ public:
     explicit NeneNode(std::string);
     virtual ~NeneNode() = default;
 
+    void set_valve_sdl_event(bool v)   { valve_sdl_event = v; }
+    void set_valve_time_lapse(bool v)  { valve_time_lapse = v; }
+    void set_valve_nene_mail(bool v)   { valve_nene_mail = v; }
+    void set_valve_render(bool v)      { valve_render = v; }
+    void set_active(bool v) {
+        set_valve_sdl_event(v);
+        set_valve_time_lapse(v);
+        set_valve_nene_mail(v);
+        set_valve_render(v);
+    }
+
 protected:
     // ツリー初期化パルス
     void make_tree(); // →.cpp
@@ -23,10 +34,10 @@ protected:
     void pulse_render(SDL_Renderer*);         // →.cpp（幅優先）
 
     // 水門(パルスを遮断する)
-    bool valve_opening_sdl_event = true;
-    bool valve_opening_time_lapse = true;
-    bool valve_opening_nene_event = true;
-    bool valve_opening_render = true;
+    bool valve_sdl_event = true;
+    bool valve_time_lapse = true;
+    bool valve_nene_mail = true;
+    bool valve_render = true;
 
     // ねねサーバ共有
     std::shared_ptr<MailServer> mail_server;

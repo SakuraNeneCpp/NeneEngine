@@ -17,7 +17,7 @@ void NeneNode::make_tree() {
 }
 
 void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
-    if (!valve_opening_sdl_event) return;
+    if (!valve_sdl_event) return;
 
     handle_sdl_event(ev);
     for (auto& kv : children) {
@@ -26,7 +26,7 @@ void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
 }
 
 void NeneNode::pulse_time_lapse(const float& dt) {
-    if (!valve_opening_time_lapse) return; // ★修正（sdl_event を見ていた）
+    if (!valve_time_lapse) return; // ★修正（sdl_event を見ていた）
 
     handle_time_lapse(dt);
     for (auto& kv : children) {
@@ -35,7 +35,7 @@ void NeneNode::pulse_time_lapse(const float& dt) {
 }
 
 void NeneNode::pulse_nene_mail(const NeneMail& mail) {
-    if (!valve_opening_nene_event) return;
+    if (!valve_nene_mail) return;
 
     // 宛先が無い（ブロードキャスト）か、自分宛なら処理
     if (!mail.to.has_value() || mail.to.value() == this->name) {
@@ -50,18 +50,14 @@ void NeneNode::pulse_nene_mail(const NeneMail& mail) {
 
 // 幅優先で render 命令を伝播
 void NeneNode::pulse_render(SDL_Renderer* r) {
-    if (!valve_opening_render) return;
     if (!r) return;
-
     std::queue<NeneNode*> q;
     q.push(this);
-
     while (!q.empty()) {
         NeneNode* node = q.front();
         q.pop();
-
+        if (!node->valve_render) continue;
         node->render(r);
-
         for (auto& kv : node->children) {
             if (kv.second) q.push(kv.second.get());
         }
