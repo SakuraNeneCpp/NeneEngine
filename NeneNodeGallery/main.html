@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>NeneNode Gallery</title>
+  <title>NeneNodeGallery</title>
   <meta name="color-scheme" content="light dark" />
   <style>
     :root{
@@ -297,7 +297,7 @@
         <div class="snippet-head">
           <div class="meta">
             <h2 class="title">開発環境構築</h2>
-            <p class="desc"></p>
+            <p class="desc">C++, SDL3, NeneEngine によるゲーム開発の環境構築例</p>
             <div class="tags" aria-label="タグ">
               <span class="tag">others</span>
             </div>
@@ -343,7 +343,26 @@
               </button>
             </div>
           </div>
-          <pre><code class="code" data-language="txt">あとで書く</code></pre>
+          <pre><code class="code" data-language="txt">GameName/
+    build/
+        (ビルド後にassets/を実行ファイルの隣にコピーすると安定する. 必須ではない)
+    assets/
+        icons/
+        fonts/
+        sprites/
+        ...
+    src/
+        main.cpp
+        game.cpp
+        ui/
+        enemies/
+        ...
+    note/
+        (任意. 企画書, TODO, イメージボード, スケジュール管理, メモなど)
+    CMakeLists.txt
+    README.txt(.md)
+    .gitignore
+</code></pre>
         </div>
       </article>
 
