@@ -6,6 +6,7 @@
 
 ## NeneNodeGallery
 [NeneNodeGallery](./NeneNodeGallery/main.html)
+↑ ソースコードが開く. ブラウザで表示してほしいのに...
 
 ## リリースノート
 

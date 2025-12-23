@@ -83,6 +83,13 @@ add_executable(ChromeDino
   ChromeDino/game.cpp
 )
 
+add_custom_command(TARGET ChromeDino POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/ChromeDino/assets
+          $<TARGET_FILE_DIR:ChromeDino>/assets
+)
+
+
 target_link_libraries(ChromeDino
   PRIVATE
     NeneEngineLib

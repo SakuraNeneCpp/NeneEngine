@@ -8,6 +8,14 @@
 std::unique_ptr<NeneRoot> create_game();
 
 int main(int, char**) {
-    auto game = create_game();
-    return game->run();
+    try {
+        auto game = create_game();
+        return game->run();
+    } catch (const std::exception& e) {
+        SDL_Log("FATAL: %s", e.what());
+        return 1;
+    } catch (...) {
+        SDL_Log("FATAL: unknown exception");
+        return 1;
+    }
 }

@@ -70,4 +70,6 @@ private:
     bool running = false;
 
     virtual void handle_sdl_event(const SDL_Event&) override;
+
+    bool tree_built = false;
 };

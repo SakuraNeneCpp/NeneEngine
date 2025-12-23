@@ -71,7 +71,7 @@ void NeneNode::pulse_render(SDL_Renderer* r) {
 void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     if (!child) return;
 
-    // 共有サービスを親から引き継ぐ（ここが超大事）
+    // 共有サービスを親から引き継ぐ
     child->mail_server = this->mail_server;
     child->asset_loader = this->asset_loader;
     child->font_loader  = this->font_loader;
@@ -111,7 +111,7 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
         return;
     }
 
-    // アイコン（任意）
+    // アイコン
     if (icon_path && icon_path[0] != '\0') {
         SDL_Surface* iconSurf = IMG_Load(icon_path);
         if (!iconSurf) {
@@ -122,13 +122,11 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
         }
     }
 
-    // ねねサーバ立ち上げ（renderer が必要）
+    // ねねサーバ立ち上げ
     this->mail_server  = std::make_shared<MailServer>();
     this->asset_loader = std::make_shared<AssetLoader>(renderer);
     this->font_loader  = std::make_shared<FontLoader>(renderer);
 
-    // ツリー生成パルス送信
-    make_tree();
 }
 
 NeneRoot::~NeneRoot() {
@@ -138,6 +136,12 @@ NeneRoot::~NeneRoot() {
 }
 
 int NeneRoot::run() {
+    if (!tree_built) {
+        make_tree();
+        tree_built = true;
+        std::cout << "#[" << this->name << "] game tree initialized" << std::endl;
+    }
+
     running = true;
     std::cout << "#[" << this->name << "] main loop start\n";
 
@@ -156,7 +160,7 @@ int NeneRoot::run() {
         prev_ticks = now_ticks;
         pulse_time_lapse(dt);
 
-        // (3) NeneMail（あるだけ処理）
+        // (3) NeneMail
         if (mail_server) {
             NeneMail mail;
             while (mail_server->pull(mail)) {
@@ -164,13 +168,13 @@ int NeneRoot::run() {
             }
         }
 
-        // (4) render（最後に幅優先）
+        // (4) render (ここだけ幅優先)
         SDL_RenderClear(renderer);
         pulse_render(renderer);
         SDL_RenderPresent(renderer);
 
-        // 仮のウェイト（後でFPS制御に置換すると上品）
-        SDL_Delay(1);
+        // 仮のウェイト（後でFPS制御に置換する）
+        SDL_Delay(16);
     }
 
     std::cout << "#[" << this->name << "] main loop end\n";
