@@ -10,8 +10,7 @@
 // タイトルシーン
 class TitleScene final : public NeneNode {
 public:
-    explicit TitleScene(std::string name)
-        : NeneNode(std::move(name)) {}
+    explicit TitleScene(std::string name) : NeneNode(std::move(name)) {}
 protected:
     void init_node() override {
         // 共有サービスは add_child 時に親から引き継がれている想定
@@ -68,7 +67,7 @@ protected:
             if (ev.key.key == SDLK_SPACE) {
                 // scene_switch にメールでシーン切替要求
                 // (to, from, subject, body)
-                send_mail(NeneMail("scene_switch", this->name, "switch_scene", "play_scene"));
+                send_mail(NeneMail("scene_switch", this->name, "switch_to", "play_scene"));
             }
         }
     }
@@ -103,44 +102,19 @@ protected:
 };
 
 // シーンスイッチ
-class SceneSwitch final : public NeneNode {
+class SceneSwitch final : public NeneSwitch {
 public:
-    explicit SceneSwitch(std::string name) : NeneNode(std::move(name)) {}
+    explicit SceneSwitch(std::string name) : NeneSwitch(std::move(name)) {}
 
 protected:
     void init_node() override {
-        switch_to_title(true); // 初期化時にタイトル生成
-    }
-
-    void handle_nene_mail(const NeneMail& mail) override {
-        if (mail.subject == "switch_scene") {
-            if (mail.body == "play_scene")  switch_to_play();
-            if (mail.body == "title_scene") switch_to_title();
-        }
-    }
-
-private:
-    enum class State { Title, Play };
-    State state_ = State::Title;
-
-    void switch_to_play(bool first = false) {
-        if (!first && state_ == State::Play) return;
-
-        clear_children(); // いまのシーン破棄
-        add_child(std::make_unique<PlayScene>("play_scene")); // 新しく作る
-        children["play_scene"]->build_subtree();
-        state_ = State::Play;
-        nnlog("switched to play_scene");
-        show_tree();
-    }
-
-    void switch_to_title(bool first = false) {
-        if (!first && state_ == State::Title) return;
-        clear_children();
-        add_child(std::make_unique<TitleScene>("title_scene"));
-        children["title_scene"]->build_subtree();
-        state_ = State::Title;
-        nnlog("switched to title_scene");
+        register_node("title_scene", [] {
+            return std::make_unique<TitleScene>("title_scene");
+        });
+        register_node("play_scene", [] {
+            return std::make_unique<PlayScene>("play_scene");
+        });
+        set_initial_node("title_scene");
     }
 };
 
@@ -160,7 +134,7 @@ public:
     {}
 protected:
     void init_node() override {
-        // シーンスイッチを子に持つ
+        // シーンスイッチを生成.
         add_child(std::make_unique<SceneSwitch>("scene_switch"));
     }
 private:

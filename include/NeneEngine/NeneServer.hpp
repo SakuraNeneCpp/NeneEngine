@@ -13,6 +13,7 @@
 class NeneGlobalSettings {
 public:
     // ---- 必須項目（例）----
+    std::string root_name;
     // ウィンドウ（論理）設定
     int window_x = 100;
     int window_y = 100;

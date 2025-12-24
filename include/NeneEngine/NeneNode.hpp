@@ -1,9 +1,11 @@
 #pragma once
 #include <memory>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <map>
+#include <unordered_map>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneServer.hpp>
 
@@ -107,6 +109,59 @@ private:
     bool running = false;
 
     virtual void handle_sdl_event(const SDL_Event&) override;
+    virtual void handle_nene_mail(const NeneMail& mail) override;
 
     bool tree_built = false;
+};
+
+// ねねスイッチ
+class NeneSwitch : public NeneNode {
+public:
+    using Factory = std::function<std::unique_ptr<NeneNode>()>;
+    explicit NeneSwitch(std::string name) : NeneNode(std::move(name)) {}
+    // ノード登録
+    void register_node(std::string node_name, Factory factory) {
+        if (!factory) nnthrow("register_node: factory is null");
+        factories_.emplace(std::move(node_name), std::move(factory));
+    }
+    // 現在のノード名（無ければ空）
+    const std::string& current_node() const { return current_node_; }
+    // 切替（破棄→生成→build）
+    void switch_to(std::string_view node_name, bool force = false, bool initial = false) {
+        const std::string key(node_name);
+        if (!force && current_node_ == key) return;
+        auto it = factories_.find(key);
+        if (it == factories_.end()) nnthrow("switch_to: unknown scene: " + key);
+        // 今のノード破棄
+        clear_children();
+        // 新しいノード生成
+        auto node = (it->second)();
+        if (!node) nnthrow("switch_to: factory returned null: " + key);
+        add_child(std::move(node));
+        auto child_it = children.find(key);
+        if (child_it == children.end() || !child_it->second) nnthrow("switch_to: child missing after add_child: " + key);
+        child_it->second->build_subtree();
+        current_node_ = key;
+        if(!initial) {
+            nnlog(std::string("switched to ") + current_node_);
+            send_mail(NeneMail(this->global_settings->root_name, this->name, "show_all", ""));
+        }
+    }
+    // 初期ノード指定（init_node内で呼ぶ用）
+    void set_initial_node(std::string_view node_name) {
+        switch_to(node_name, true, true);
+    }
+
+protected:
+    // デフォルトで Mail に対応（不要なら派生で無効化してOK）
+    void handle_nene_mail(const NeneMail& mail) override {
+        if (mail.to == this->name && mail.subject == mail_subject_ && !mail.body.empty()) {
+            switch_to(mail.body);
+        }
+    }
+
+private:
+    std::unordered_map<std::string, Factory> factories_;
+    std::string current_node_;
+    std::string mail_subject_ = "switch_to";
 };

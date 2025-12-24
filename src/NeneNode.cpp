@@ -35,22 +35,16 @@ void NeneNode::show_tree(std::ostream& os) const {
             kv.second->dump_tree_impl(os, "", last);
         }
     }
-
     os << "\n";
 }
 
-void NeneNode::dump_tree_impl(std::ostream& os,
-                             const std::string& prefix,
-                             bool is_last) const {
+void NeneNode::dump_tree_impl(std::ostream& os, const std::string& prefix, bool is_last) const {
     os << "  "
        << prefix
        << (is_last ? "└─ " : "├─ ")
        << "[" << name << "]";
-    if (!valve_sdl_event && !valve_time_lapse && !valve_nene_mail && !valve_render) {
-        os << " (inactive)";
-    } else if (!valve_render) {
-        os << " (render off)";
-    }
+    if (!valve_sdl_event && !valve_time_lapse && !valve_nene_mail && !valve_render) os << " (inactive)";
+    else if (!valve_render) os << " (render off)";
     os << "\n";
     const std::string next_prefix = prefix + (is_last ? "   " : "│  ");
     const std::size_t n = children.size();
@@ -73,7 +67,6 @@ void NeneNode::make_tree() {
 
 void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
     if (!valve_sdl_event) return;
-
     handle_sdl_event(ev);
     for (auto& kv : children) {
         if (kv.second) kv.second->pulse_sdl_event(ev);
@@ -82,7 +75,6 @@ void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
 
 void NeneNode::pulse_time_lapse(const float& dt) {
     if (!valve_time_lapse) return;
-
     handle_time_lapse(dt);
     for (auto& kv : children) {
         if (kv.second) kv.second->pulse_time_lapse(dt);
@@ -134,28 +126,25 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
 NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
                    Uint32 flags, int x, int y, const char* icon_path)
     : NeneNode(std::move(node_name)) {
-
     // SDL 初期化
-    if (!SDL_Init(SDL_INIT_VIDEO)) { nnerr("SDL_Init failed"); return; }
+    if (!SDL_Init(SDL_INIT_VIDEO)) { nnthrow("SDL_Init failed"); }
     // ウィンドウ生成
     window = SDL_CreateWindow(title, w, h, flags);
-    if (!window) { nnerr("SDL_CreateWindow failed"); return; }
+    if (!window) { nnthrow("SDL_CreateWindow failed"); }
     // ウィンドウ配置
     SDL_SetWindowPosition(window, x, y);
     // レンダラー生成
     renderer = SDL_CreateRenderer(window, nullptr);
-    if (!renderer) { nnerr("SDL_CreateRenderer failed"); return; }
-
+    if (!renderer) { nnthrow("SDL_CreateRenderer failed"); }
     // アイコン
     if (icon_path && icon_path[0] != '\0') {
         SDL_Surface* iconSurf = IMG_Load(icon_path);
-        if (!iconSurf) { nnerr("icon load faile"); return; }
+        if (!iconSurf) { nnerr("icon load faile"); }
         else {
             SDL_SetWindowIcon(window, iconSurf);
             SDL_DestroySurface(iconSurf);
         }
     }
-
     // ねねサーバ立ち上げ
     this->mail_server     = std::make_shared<MailServer>();
     this->asset_loader    = std::make_shared<AssetLoader>(renderer);
@@ -163,6 +152,7 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
     this->path_service    = std::make_shared<PathService>();
     this->global_settings = std::make_shared<NeneGlobalSettings>();
     if (this->global_settings) {
+        this->global_settings->root_name = this->name;
         this->global_settings->window_x = x;
         this->global_settings->window_y = y;
         this->global_settings->window_w = w;
@@ -236,5 +226,11 @@ void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
             global_settings->window_w = ev.window.data1;
             global_settings->window_h = ev.window.data2;
         }
+    }
+}
+
+void NeneRoot::handle_nene_mail(const NeneMail& mail) {
+    if (mail.subject == "show_all" && mail.body.empty()) {
+        show_tree();
     }
 }
