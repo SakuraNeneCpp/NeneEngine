@@ -117,6 +117,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     child->font_loader  = this->font_loader;
     child->path_service = this->path_service;
     child->global_settings = this->global_settings;
+    child->collision_world_aabb_n = this->collision_world_aabb_n;
     const std::string key = child->name;
     if (children.find(key) != children.end()) nnthrow("duplicated child name: " + key);
     children.emplace(key, std::move(child));
@@ -158,6 +159,7 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
         this->global_settings->window_w = w;
         this->global_settings->window_h = h;
     }
+    this->collision_world_aabb_n = std::make_shared<NeneCollisionWorld2D_AABB_N>();
 }
 
 NeneRoot::~NeneRoot() {

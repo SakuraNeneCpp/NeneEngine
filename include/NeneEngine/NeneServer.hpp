@@ -10,6 +10,147 @@
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+class NeneCollisionWorld2D_AABB_N {
+public:
+    using ColliderId = std::uint32_t;
+
+    struct ColliderDesc {
+        std::string owner_name;     // "dino", "cactus_12" 等
+        SDL_FRect   aabb{};         // world座標のAABB
+        std::uint32_t layer = 1;    // 自分の属するレイヤ
+        std::uint32_t mask  = 0xFFFFFFFFu; // 衝突したい相手レイヤのビット集合
+        bool enabled = true;
+        bool is_trigger = true;     // 今回は検出だけなのでデフォルトtrue扱い
+    };
+
+    struct Hit {
+        ColliderId other_id = 0;
+        std::string other_owner;
+        SDL_FRect overlap{};        // 重なり領域（欲しければ）
+    };
+
+public:
+    NeneCollisionWorld2D_AABB_N() = default;
+
+    // 追加・削除
+    ColliderId create_collider(const ColliderDesc& desc) {
+        const ColliderId id = next_id_++;
+        Entry e;
+        e.owner_name = desc.owner_name;
+        e.aabb = desc.aabb;
+        e.layer = desc.layer;
+        e.mask  = desc.mask;
+        e.enabled = desc.enabled;
+        e.is_trigger = desc.is_trigger;
+        colliders_.emplace(id, std::move(e));
+        return id;
+    }
+
+    void destroy_collider(ColliderId id) {
+        colliders_.erase(id);
+        if (target_id_ == id) target_id_ = kInvalid;
+    }
+
+    // 更新
+    bool set_aabb(ColliderId id, const SDL_FRect& aabb) {
+        auto it = colliders_.find(id);
+        if (it == colliders_.end()) return false;
+        it->second.aabb = aabb;
+        return true;
+    }
+
+    bool set_enabled(ColliderId id, bool v) {
+        auto it = colliders_.find(id);
+        if (it == colliders_.end()) return false;
+        it->second.enabled = v;
+        return true;
+    }
+
+    // ターゲット指定
+    bool set_target(ColliderId id) {
+        if (colliders_.find(id) == colliders_.end()) return false;
+        target_id_ = id;
+        return true;
+    }
+
+    ColliderId target() const { return target_id_; }
+
+    // 1フレーム分：ターゲットが何かと当たっているかを検出（O(N)）
+    // 返り値: 衝突相手の一覧（複数ヒットも返せる）
+    const std::vector<Hit>& step() {
+        hits_.clear();
+        if (target_id_ == kInvalid) return hits_;
+        auto itT = colliders_.find(target_id_);
+        if (itT == colliders_.end()) return hits_;
+        const Entry& t = itT->second;
+        if (!t.enabled) return hits_;
+        for (const auto& kv : colliders_) {
+            const ColliderId other_id = kv.first;
+            if (other_id == target_id_) continue;
+            const Entry& o = kv.second;
+            if (!o.enabled) continue;
+            // layer/mask フィルタ（必要なければ消してOK）
+            if ( (t.mask & o.layer) == 0 ) continue;
+            if ( (o.mask & t.layer) == 0 ) continue;
+            SDL_FRect overlap{};
+            if (intersects_aabb_(t.aabb, o.aabb, overlap)) {
+                Hit h;
+                h.other_id = other_id;
+                h.other_owner = o.owner_name;
+                h.overlap = overlap;
+                hits_.push_back(std::move(h));
+            }
+        }
+        return hits_;
+    }
+    const std::vector<Hit>& hits() const { return hits_; }
+    // デバッグ/参照用
+    std::optional<std::string> owner_name(ColliderId id) const {
+        auto it = colliders_.find(id);
+        if (it == colliders_.end()) return std::nullopt;
+        return it->second.owner_name;
+    }
+
+private:
+    struct Entry {
+        std::string owner_name;
+        SDL_FRect aabb{};
+        std::uint32_t layer = 1;
+        std::uint32_t mask  = 0xFFFFFFFFu;
+        bool enabled = true;
+        bool is_trigger = true;
+    };
+    static bool intersects_aabb_(const SDL_FRect& a, const SDL_FRect& b, SDL_FRect& overlap_out) {
+        // min/max
+        const float ax0 = a.x;
+        const float ay0 = a.y;
+        const float ax1 = a.x + a.w;
+        const float ay1 = a.y + a.h;
+        const float bx0 = b.x;
+        const float by0 = b.y;
+        const float bx1 = b.x + b.w;
+        const float by1 = b.y + b.h;
+        // 分離判定（接触を「当たり」に含めたいなら < を <= に変える）
+        if (ax1 <= bx0) return false;
+        if (bx1 <= ax0) return false;
+        if (ay1 <= by0) return false;
+        if (by1 <= ay0) return false;
+        const float ox0 = (ax0 > bx0) ? ax0 : bx0;
+        const float oy0 = (ay0 > by0) ? ay0 : by0;
+        const float ox1 = (ax1 < bx1) ? ax1 : bx1;
+        const float oy1 = (ay1 < by1) ? ay1 : by1;
+        overlap_out = SDL_FRect{ ox0, oy0, (ox1 - ox0), (oy1 - oy0) };
+        return true;
+    }
+
+private:
+    static constexpr ColliderId kInvalid = 0;
+    std::unordered_map<ColliderId, Entry> colliders_;
+    ColliderId next_id_ = 1;
+    ColliderId target_id_ = kInvalid;
+    std::vector<Hit> hits_;
+};
+
 class NeneGlobalSettings {
 public:
     // ---- 必須項目（例）----

@@ -53,6 +53,7 @@ protected:
     std::shared_ptr<FontLoader> font_loader;
     std::shared_ptr<PathService> path_service;
     std::shared_ptr<NeneGlobalSettings> global_settings;
+    std::shared_ptr<NeneCollisionWorld2D_AABB_N> collision_world_aabb_n;
 
     // 子ノード
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順
