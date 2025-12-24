@@ -6,18 +6,6 @@
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneNode.hpp>
 
-// assets/が.exeの隣にある想定
-// assets/から欲しいアセットへのパスを渡すと絶対パスの残りを補う.
-// 引数: "assets/..."
-static std::string asset_path(const char* rel_from_assets_root){
-    const char* base = SDL_GetBasePath();
-    if (!base) { // 最悪, 相対パスを返す
-        SDL_Log("SDL_GetBasePath failed: %s", SDL_GetError());
-        return rel_from_assets_root;
-    }
-    return std::string(base) + rel_from_assets_root;
-}
-
 
 // タイトルシーン
 class TitleScene final : public NeneNode {
@@ -26,15 +14,12 @@ public:
         : NeneNode(std::move(name)) {}
 protected:
     void init_node() override {
-
         // 共有サービスは add_child 時に親から引き継がれている想定
-        if (!asset_loader || !font_loader) {
-            throw std::runtime_error("[TitleScene] services not ready (asset_loader/font_loader)");
-        }
+        if (!asset_loader || !font_loader || !path_service) nnthrow("services not ready (asset_loader/font_loader/path_service)");
         // スプライト
-        sprite_tex_ = asset_loader->get_texture(asset_path("assets/sprites/sprite.png"));
+        sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
         // フォント
-        font_path_ = asset_path("assets/fonts/NotoSansJP-Regular.ttf");
+        font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         // タイトル文字
         title_tex_ = font_loader->get_text_texture(font_path_, 56, "ChromeDino", SDL_Color{255, 255, 255, 255});
         // Press...文字
@@ -45,9 +30,7 @@ protected:
         if (!sprite_tex_ || !title_tex_ || !press_tex_) return;
         // 画面サイズ
         int w = 0, h = 0;
-        if (!SDL_GetRenderOutputSize(r, &w, &h)) {
-            return;
-        }
+        if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
         // 恐竜 (テクスチャアトラス内)
         const SDL_FRect dino_src { 1514.2f, 0.0f, 88.0f, 96.0f };
         const float dino_w = 88.0f;
@@ -122,72 +105,45 @@ protected:
 // シーンスイッチ
 class SceneSwitch final : public NeneNode {
 public:
-    explicit SceneSwitch(std::string name)
-        : NeneNode(std::move(name)) {}
+    explicit SceneSwitch(std::string name) : NeneNode(std::move(name)) {}
 
 protected:
-    void init_node() override
-    {
-        auto t = std::make_unique<TitleScene>("title_scene");
-        title_ = t.get();
-        add_child(std::move(t));
-
-        auto p = std::make_unique<PlayScene>("play_scene");
-        play_ = p.get();
-        add_child(std::move(p));
-
-        // 初期はタイトルだけ有効、プレイは無効（＝伝播しない）
-        title_->set_active(true);
-        play_->set_active(false);
-
-        state_ = State::Title;
+    void init_node() override {
+        switch_to_title(true); // 初期化時にタイトル生成
     }
 
-    void handle_nene_mail(const NeneMail& mail) override
-    {
-        // scene_switch 宛の "switch_scene" を受け取ったら切替
-        if (mail.subject == "switch_scene" && mail.body == "play_scene") {
-            switch_to_play();
+    void handle_nene_mail(const NeneMail& mail) override {
+        if (mail.subject == "switch_scene") {
+            if (mail.body == "play_scene")  switch_to_play();
+            if (mail.body == "title_scene") switch_to_title();
         }
-        if (mail.subject == "switch_scene" && mail.body == "title_scene") {
-            switch_to_title();
-        }
-    }
-
-    void render(SDL_Renderer* r) override
-    {
-        if (!r) return;
-        // 背景（黒）
-        SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
-        SDL_RenderClear(r);
-        // 実際の内容は、active な子にだけ伝播して描かれる
     }
 
 private:
     enum class State { Title, Play };
     State state_ = State::Title;
 
-    TitleScene* title_ = nullptr;
-    PlayScene*  play_  = nullptr;
+    void switch_to_play(bool first = false) {
+        if (!first && state_ == State::Play) return;
 
-    void switch_to_play()
-    {
-        if (state_ == State::Play) return;
-        title_->set_active(false);
-        play_->set_active(true);
+        clear_children(); // いまのシーン破棄
+        add_child(std::make_unique<PlayScene>("play_scene")); // 新しく作る
+        children["play_scene"]->build_subtree();
         state_ = State::Play;
-        SDL_Log("[scene_switch] switched to play_scene");
+        nnlog("switched to play_scene");
+        show_tree();
     }
 
-    void switch_to_title()
-    {
-        if (state_ == State::Title) return;
-        play_->set_active(false);
-        title_->set_active(true);
+    void switch_to_title(bool first = false) {
+        if (!first && state_ == State::Title) return;
+        clear_children();
+        add_child(std::make_unique<TitleScene>("title_scene"));
+        children["title_scene"]->build_subtree();
         state_ = State::Title;
-        SDL_Log("[scene_switch] switched to title_scene");
+        nnlog("switched to title_scene");
     }
 };
+
 
 // ルートノード
 class Game final : public NeneRoot {
@@ -197,15 +153,20 @@ public:
         "game",
         "ChromeDino",
         960, 540,
-        0, // リサイズ不可
+        SDL_WINDOW_RESIZABLE,
         100, 100,
-        asset_path("assets/icons/T-Rex.svg").c_str()
+        icon_path().c_str()
       )
     {}
 protected:
     void init_node() override {
         // シーンスイッチを子に持つ
         add_child(std::make_unique<SceneSwitch>("scene_switch"));
+    }
+private:
+    static const std::string& icon_path() {
+        static std::string p = PathService::resolve_base("assets/icons/T-Rex.svg");
+        return p;
     }
 };
 std::unique_ptr<NeneRoot> create_game() {

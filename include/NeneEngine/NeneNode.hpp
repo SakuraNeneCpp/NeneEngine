@@ -1,6 +1,8 @@
 #pragma once
 #include <memory>
+#include <iostream>
 #include <string>
+#include <string_view>
 #include <map>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneServer.hpp>
@@ -23,9 +25,13 @@ public:
         set_valve_render(v);
     }
 
+    void build_subtree() { make_tree(); }
+
 protected:
     // ツリー初期化パルス
     void make_tree(); // →.cpp
+
+    void show_tree(std::ostream& os = std::cout) const;
 
     // イベントパルス
     void pulse_sdl_event(const SDL_Event&);   // →.cpp
@@ -43,6 +49,8 @@ protected:
     std::shared_ptr<MailServer> mail_server;
     std::shared_ptr<AssetLoader> asset_loader;
     std::shared_ptr<FontLoader> font_loader;
+    std::shared_ptr<PathService> path_service;
+    std::shared_ptr<NeneGlobalSettings> global_settings;
 
     // 子ノード
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順
@@ -59,13 +67,31 @@ protected:
     // 親子付け
     virtual void add_child(std::unique_ptr<NeneNode>); // →.cpp
 
-    // 便利：ノードからメール送信
+    bool remove_child(const std::string& name) {
+        return children.erase(name) > 0;
+    }
+    void clear_children() {
+        children.clear();
+    }
+
+
+    // ノードからメール送信
     void send_mail(const NeneMail& mail) {
         if (mail_server) mail_server->push(mail);
     }
     void send_mail(NeneMail&& mail) {
         if (mail_server) mail_server->push(std::move(mail));
     }
+
+    // ターミナル出力
+    void nnlog(std::string_view msg) const; // →.cpp
+    void nnerr(std::string_view msg) const; // →.cpp
+    void nnthrow(std::string_view msg) const; // →.cpp
+
+private:
+    void dump_tree_impl(std::ostream& os,
+                        const std::string& prefix,
+                        bool is_last) const;
 };
 
 // ねねルート
