@@ -3,9 +3,8 @@
 #include <SDL3_image/SDL_image.h>
 #include <NeneEngine/NeneNode.hpp>
 
-// --------------------
+
 // NeneNode
-// --------------------
 NeneNode::NeneNode(std::string node_name)
     : name(std::move(node_name)) {}
 
@@ -66,12 +65,10 @@ void NeneNode::pulse_render(SDL_Renderer* r) {
 
 void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     if (!child) return;
-
     // 共有サービスを親から引き継ぐ
     child->mail_server = this->mail_server;
     child->asset_loader = this->asset_loader;
     child->font_loader  = this->font_loader;
-
     const std::string key = child->name;
     if (children.find(key) != children.end()) {
         throw std::runtime_error("[NeneNode] duplicated child name: " + key);
@@ -79,9 +76,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     children.emplace(key, std::move(child));
 }
 
-// --------------------
 // NeneRoot
-// --------------------
 NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
                    Uint32 flags, int x, int y, const char* icon_path)
     : NeneNode(std::move(node_name)) {
