@@ -25,18 +25,27 @@ public:
         set_valve_nene_mail(v);
         set_valve_render(v);
     }
+    // dirty伝播
+    void set_render_z(int z) {
+        if (render_z == z) return;
+        render_z = z;
+        mark_render_dirty();
+    }
+    int  get_render_z() const { return render_z; }
 protected:
     void show_tree(std::ostream& os = std::cout) const;
     // イベントパルス
     void pulse_sdl_event(const SDL_Event&);   // →.cpp
     void pulse_time_lapse(const float&);      // →.cpp
     void pulse_nene_mail(const NeneMail&);    // →.cpp
-    void pulse_render(SDL_Renderer*);         // →.cpp（幅優先）
+    void pulse_render(SDL_Renderer*);         // →.cpp
     // 水門(パルスを遮断する)
     bool valve_sdl_event = true;
     bool valve_time_lapse = true;
     bool valve_nene_mail = true;
     bool valve_render = true;
+    // z座標. 低いほど先に描画 (奥)、高いほど後に描画 (手前)
+    int render_z = 0;
     // ねねサーバ共有
     std::shared_ptr<NeneMailServer> mail_server;
     std::shared_ptr<NeneImageLoader> asset_loader;
@@ -44,6 +53,8 @@ protected:
     std::shared_ptr<PathService> path_service;
     std::shared_ptr<NeneGlobalSettings> global_settings;
     std::shared_ptr<NeneCollisionWorld> collision_world;
+    // 親ノード
+    NeneNode* parent = nullptr;
     // 子ノード
     std::map<std::string, std::unique_ptr<NeneNode>> children; // アルファベット順
     // ノード初期化パルスの前方フック
@@ -53,14 +64,15 @@ protected:
     virtual void handle_time_lapse(const float&) {}
     virtual void handle_nene_mail(const NeneMail&) {}
     virtual void render(SDL_Renderer*) {}
+    // dirty伝播
+    void mark_render_dirty() {
+        render_cache_dirty_ = true;
+        if (parent) parent->mark_render_dirty();
+    }
     // 親子付け
     virtual void add_child(std::unique_ptr<NeneNode>); // →.cpp
-    bool remove_child(const std::string& name) {
-        return children.erase(name) > 0;
-    }
-    void clear_children() {
-        children.clear();
-    }
+    bool remove_child(const std::string& name); // →.cpp
+    void clear_children(); // →.cpp
     // ノードからメール送信
     void send_mail(const NeneMail& mail) {
         if (mail_server) mail_server->push(mail);
@@ -74,6 +86,9 @@ protected:
     void nnthrow(std::string_view msg) const; // →.cpp
 private:
     void dump_tree_impl(std::ostream& os, const std::string& prefix, bool is_last) const;
+    mutable bool render_cache_dirty_ = true;
+    mutable std::vector<NeneNode*> render_cache_;
+    void rebuild_render_cache_() const;
 };
 
 // ねねルート
@@ -133,7 +148,6 @@ protected:
         const bool force = (mail.body == current_node());
         switch_to(mail.body, force);
     }
-
 private:
     std::unordered_map<std::string, Factory> factories_;
     std::string current_node_;

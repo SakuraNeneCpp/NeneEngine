@@ -320,6 +320,8 @@ protected:
         update_score_texture_(0);
         // 初期状態
         last_score_int_ = 0;
+        // 手前に表示される
+        set_render_z(1000);
     }
     void handle_time_lapse(const float& dt) override {
         (void)dt;
@@ -410,7 +412,7 @@ protected:
         if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
         else nnerr("no collision world");
         add_child(std::make_unique<World>("world"));
-        add_child(std::make_unique<Overlay>("z_overlay"));
+        add_child(std::make_unique<Overlay>("overlay"));
     }
 };
 
