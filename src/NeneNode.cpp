@@ -58,13 +58,6 @@ void NeneNode::dump_tree_impl(std::ostream& os, const std::string& prefix, bool 
     }
 }
 
-void NeneNode::make_tree() {
-    init_node();
-    for (auto& kv : children) {
-        if (kv.second) kv.second->make_tree();
-    }
-}
-
 void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
     if (!valve_sdl_event) return;
     handle_sdl_event(ev);
@@ -120,12 +113,21 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     child->collision_world = this->collision_world;
     const std::string key = child->name;
     if (children.find(key) != children.end()) nnthrow("duplicated child name: " + key);
-    children.emplace(key, std::move(child));
+    // emplace は1回だけ
+    auto [it, inserted] = children.emplace(key, std::move(child));
+    if (!inserted) nnthrow("failed to emplace child: " + key);
+    // 子を初期化（失敗したらロールバック）
+    try {
+        it->second->init_node();
+    } catch (...) {
+        children.erase(it);
+        throw;
+    }
 }
 
+
 // NeneRoot
-NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h,
-                   Uint32 flags, int x, int y, const char* icon_path)
+NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint32 flags, int x, int y, const char* icon_path)
     : NeneNode(std::move(node_name)) {
     // SDL 初期化
     if (!SDL_Init(SDL_INIT_VIDEO)) { nnthrow("SDL_Init failed"); }
@@ -170,47 +172,39 @@ NeneRoot::~NeneRoot() {
 
 int NeneRoot::run() {
     if (!tree_built) {
-        make_tree();
+        init_node();
         tree_built = true;
         nnlog("game tree initialized");
         show_tree();
     }
-
     running = true;
     nnlog("main loop start");
-
     Uint64 prev_ticks = SDL_GetTicks();
-
     while (running) {
-        // (1) SDLイベント
+        // SDLイベント
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             pulse_sdl_event(ev);
         }
-
-        // (2) 時間経過
+        // 時間経過
         Uint64 now_ticks = SDL_GetTicks();
         float dt = static_cast<float>(now_ticks - prev_ticks) / 1000.0f;
         prev_ticks = now_ticks;
         pulse_time_lapse(dt);
-
-        // (3) NeneMail
+        // NeneMail
         if (mail_server) {
             NeneMail mail;
             while (mail_server->pull(mail)) {
                 pulse_nene_mail(mail);
             }
         }
-
-        // (4) render (ここだけ幅優先)
+        // render (ここだけ幅優先)
         SDL_RenderClear(renderer);
         pulse_render(renderer);
         SDL_RenderPresent(renderer);
-
-        // 仮のウェイト（後でFPS制御に置換する）
+        // ウェイト（後でFPS制御に置換する）
         SDL_Delay(16);
     }
-
     nnlog("main loop end");
     return 0;
 }

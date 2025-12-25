@@ -49,7 +49,7 @@ protected:
             SDL_FPoint{ 0.0f, h_   },
         };
         poly.position = SDL_FPoint{ x_, y_ };
-        poly.color = NenePolygonColor::Blue;
+        poly.color = NenePolygonColor::Blue; // 味方属性
         poly.layer = kLayerPlayer;
         poly.mask  = kMaskPlayerHits;
         poly.enabled = true;
@@ -143,19 +143,17 @@ protected:
     void init_node() override {
         if (!asset_loader || !path_service || !global_settings) nnthrow("services not ready (asset_loader/path_service/global_settings)");
         if (!collision_world) nnthrow("services not ready (collision_world)");
-
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
         if (!sprite_tex_) nnthrow("failed to load sprite texture");
-        // まずは適当なサイズ（あとでスプライトに合わせて調整でOK）
+        // サイズ
         w_ = 34.0f;
         h_ = 70.0f;
         // 画面右外から出現
         x_ = global_settings->window_w + spawn_margin_;
         y_ = global_settings->ground_y - h_;
-        // ★ サボテンのソース矩形（仮：適切な座標に調整してください）
-        // 例：ChromeDinoスプライトの cactus を指すrectに差し替え
+        // サボテンのソース画像
         src_ = SDL_FRect{ 446.0f, 0.0f, 34.0f, 70.0f };
-        // コライダー登録（矩形）
+        // コライダー登録
         NeneColorPolygon poly;
         poly.owner_name = this->name;
         poly.vertices = {
@@ -165,7 +163,7 @@ protected:
             SDL_FPoint{ 0.0f, h_   },
         };
         poly.position = SDL_FPoint{ x_, y_ };
-        poly.color = NenePolygonColor::Red; // 例：ダメージ属性
+        poly.color = NenePolygonColor::Red; // 敵属性
         poly.layer = kLayerObstacle;
         poly.mask  = kMaskObstacleHits;
         poly.enabled = true;
@@ -174,10 +172,10 @@ protected:
     }
     void handle_time_lapse(const float& dt) override {
         if (!global_settings) return;
-        // 左へ流す（まずは固定速度。後でglobal_settingsに入れると気持ちいい）
+        // 左へ流す（後で速度をglobal_settingsに入れる）
         x_ -= speed_ * dt;
         if (collision_world && collider_id_ != 0) collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
-        // 画面外に出たら World に自分を消すよう依頼（自分ではremove_childできないため）
+        // 画面外に出たらWorldに自分を消すよう依頼（自分ではremove_childできない）
         if (x_ + w_ < -despawn_margin_) send_mail(NeneMail("world", this->name, "despawn", this->name));
     }
     void render(SDL_Renderer* r) override {
@@ -188,9 +186,8 @@ protected:
 private:
     static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
     static constexpr std::uint32_t kLayerObstacle = 1u << 1;
-    // 障害物はプレイヤーにだけ当たればいい想定
+    // プレイヤーと同じレイヤー
     static constexpr std::uint32_t kMaskObstacleHits = kLayerPlayer;
-
     SDL_Texture* sprite_tex_ = nullptr;
     SDL_FRect src_{};
     float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
@@ -211,84 +208,194 @@ protected:
     }
     void handle_time_lapse(const float& dt) override {
         (void)dt;
-        if (!collision_world) return;
-        // まだターゲットIDが無いなら探す（生成順の都合で最初の数フレーム見つからなくてもOK）
+        if (!collision_world) nnthrow("collision world lost");
+        // まだターゲットIDが無いなら探す
+        // (生成順など都合で最初の数フレームだけターゲットが無くても問題ない)
         if (target_id_ == 0) {
             target_id_ = find_target_id_();
             if (target_id_ == 0) return;
         }
         NeneColorPolygon* target = collision_world->find(target_id_);
-        if (!target) { // 途中で消えた等
+        // ターゲットを見つけられなかったとき
+        // (理論上起きないはず)
+        if (!target) {
+            nnerr("target lost");
             target_id_ = 0;
             prev_.clear();
             return;
         }
         std::unordered_set<Id> now;
-        // 1件ヒット（仕様上、最初の1件）
+        // 衝突判定
         if (auto hit = collision_world->detect_collision(*target)) {
             const NeneColorPolygon& other = hit->get();
             now.insert(other.id);
-            // 新規衝突（enter）のみ通知
             if (prev_.find(other.id) == prev_.end()) {
+                nnlog("collision detected");
                 std::ostringstream oss;
                 oss << "target=" << target_name_
                     << " other=" << other.owner_name
                     << " color=" << static_cast<int>(other.color);
-                broadcast_("collision_enter", oss.str());
+                send_mail(NeneMail(this->name, "collision_detected", oss.str()));
             }
         }
-
-        // （任意）離脱通知が欲しければ
-        // for (auto old_id : prev_) {
-        //     if (now.find(old_id) == now.end()) {
-        //         broadcast_("collision_exit", "target=" + target_name_);
-        //     }
-        // }
-
         prev_.swap(now);
     }
 
 private:
     using Id = NeneCollisionWorld::ColliderId;
-    void broadcast_(const std::string& subject, const std::string& body) {
-        // ブロードキャストは to=nullopt のコンストラクタを使う
-        send_mail(NeneMail(this->name, subject, body));
-    }
     Id find_target_id_() const {
         if (!collision_world) return 0;
         for (const auto& c : collision_world->colliders()) {
             if (!c.enabled) continue;
-            if (c.owner_name == target_name_) {
-                return c.id;
-            }
+            if (c.owner_name == target_name_) return c.id;
         }
         return 0;
     }
-
-private:
     std::unordered_set<Id> prev_;
     std::string target_name_ = "dino";
     Id target_id_ = 0;
 };
 
 
-// オーバーレイ
-
-// スコア
-
 // ワールド
 class World final : public NeneNode {
 public:
     explicit World(std::string name) : NeneNode(std::move(name)) {}
 protected:
-    void init_node(){
+    void init_node() override {
         add_child(std::make_unique<Dino>("dino"));
         add_child(std::make_unique<Referee>("referee"));
+        spawn_accum_ = 0.0f;
+        obstacle_seq_ = 0;
     }
+    void handle_time_lapse(const float& dt) override {
+        if (global_settings) {
+            float& score = global_settings->ensuref("score", 0.0f);
+            score += dt * 100.0f; // 毎秒100点
+        }
+        spawn_accum_ += dt;
+        if (spawn_accum_ >= spawn_interval_) {
+            spawn_accum_ = 0.0f;
+            spawn_obstacle_();
+        }
+    }
+    void handle_nene_mail(const NeneMail& mail) override {
+        // 障害物を消去
+        if (mail.subject == "despawn") remove_child(mail.body);
+        // Referee のブロードキャストを受けた時
+        if (mail.subject == "collision_detected") {
+            // World 以下の time_lapse, sdl_event パルスを遮断
+            this->valve_time_lapse = false;
+            this->valve_sdl_event = false;
+            // 障害物の生成を停止
+            spawn_accum_ = 0.0f;
+            // ゲームオーバーに移行
+            if (global_settings) global_settings->setf("game_over", 1.0f);
+            return;
+        }
+    }
+private:
+    void spawn_obstacle_() {
+        const std::string name = "cactus_" + std::to_string(obstacle_seq_++);
+        add_child(std::make_unique<Cactus>(name));
+    }
+    float spawn_accum_ = 0.0f;
+    float spawn_interval_ = 1.35f;
+    int obstacle_seq_ = 0;
 };
 
 
-// UI
+// オーバーレイ（スコア + Game Over）
+class Overlay final : public NeneNode {
+public:
+    explicit Overlay(std::string name) : NeneNode(std::move(name)) {}
+protected:
+    void init_node() override {
+        if (!font_loader || !path_service || !global_settings) nnthrow("services not ready (font_loader/path_service/global_settings)");
+        font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
+        // 固定テキストは一度だけ作ればOK
+        game_over_tex_ = font_loader->get_text_texture(font_path_, 64, "Game Over", SDL_Color{255,255,255,255});
+        restart_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Restart", SDL_Color{255,255,255,255});
+        // スコア初期テクスチャ
+        update_score_texture_(0);
+        // 初期状態
+        last_score_int_ = 0;
+    }
+    void handle_time_lapse(const float& dt) override {
+        (void)dt;
+        if (!global_settings) return;
+        // スコア表示更新（score が変化したときだけテクスチャ更新）
+        const int score_i = static_cast<int>(global_settings->getf("score", 0.0f));
+        if (score_i != last_score_int_) {
+            last_score_int_ = score_i;
+            update_score_texture_(score_i);
+        }
+    }
+    void render(SDL_Renderer* r) override {
+        if (!r || !global_settings) return;
+        if (!score_tex_) return;
+        int w = 0, h = 0;
+        if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
+        // スコア
+        float sw = 0.0f, sh = 0.0f;
+        SDL_GetTextureSize(score_tex_, &sw, &sh);
+        const float pad = 16.0f;
+        SDL_FRect score_dst{
+            static_cast<float>(w) - pad - sw,
+            pad,
+            sw, sh
+        };
+        SDL_RenderTexture(r, score_tex_, nullptr, &score_dst);
+        // Game Over文字
+        const bool game_over = (global_settings->getf("game_over", 0.0f) > 0.5f);
+        if (!game_over) return;
+        if (game_over_tex_) {
+            float gw = 0.0f, gh = 0.0f;
+            SDL_GetTextureSize(game_over_tex_, &gw, &gh);
+            SDL_FRect go_dst{
+                (static_cast<float>(w) - gw) * 0.5f,
+                (static_cast<float>(h) - gh) * 0.5f - 40.0f,
+                gw, gh
+            };
+            SDL_RenderTexture(r, game_over_tex_, nullptr, &go_dst);
+        }
+        if (restart_tex_) {
+            float rw = 0.0f, rh = 0.0f;
+            SDL_GetTextureSize(restart_tex_, &rw, &rh);
+            SDL_FRect rs_dst{
+                (static_cast<float>(w) - rw) * 0.5f,
+                (static_cast<float>(h) - rh) * 0.5f + 40.0f,
+                rw, rh
+            };
+            SDL_RenderTexture(r, restart_tex_, nullptr, &rs_dst);
+        }
+    }
+    void handle_sdl_event(const SDL_Event& ev) override {
+        if (!global_settings) return;
+        const bool game_over = (global_settings->getf("game_over", 0.0f) > 0.5f);
+        if (!game_over) return;
+        if (ev.type == SDL_EVENT_KEY_DOWN) {
+            if (ev.key.key == SDLK_SPACE) {
+                // スイッチ: PlayScene → PlayScene (これでリセットできる)
+                send_mail(NeneMail("scene_switch", this->name, "switch_to", "play_scene"));
+            }
+        }
+    }
+private:
+    void update_score_texture_(int score_i) {
+        // スコアの表示(5桁)
+        std::string s = std::to_string(score_i);
+        if (s.size() < 5) s = std::string(5 - s.size(), '0') + s;
+        score_tex_ = font_loader->get_text_texture(
+            font_path_, 28, s, SDL_Color{255,255,255,255});
+    }
+    std::string font_path_;
+    SDL_Texture* score_tex_ = nullptr;
+    SDL_Texture* game_over_tex_ = nullptr;
+    SDL_Texture* restart_tex_ = nullptr;
+    int last_score_int_ = 0;
+};
+
 
 // プレイシーン
 class PlayScene final : public NeneNode {
@@ -296,7 +403,14 @@ public:
     explicit PlayScene(std::string name) : NeneNode(std::move(name)) {}
 protected:
     void init_node(){
+        if (global_settings) {
+            global_settings->setf("score", 0.0f);
+            global_settings->setf("game_over", 0.0f);
+        }
+        if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
+        else nnerr("no collision world");
         add_child(std::make_unique<World>("world"));
+        add_child(std::make_unique<Overlay>("z_overlay"));
     }
 };
 
@@ -314,7 +428,7 @@ protected:
         font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         // タイトル文字
         title_tex_ = font_loader->get_text_texture(font_path_, 56, "ChromeDino", SDL_Color{255, 255, 255, 255});
-        // Press...文字
+        // 「Press...」文字
         press_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Start", SDL_Color{255, 255, 255, 255});
     }
     void render(SDL_Renderer* r) override {
@@ -333,7 +447,7 @@ protected:
             text_w = 0.0f;
             text_h = 0.0f;
         }
-        // Press...文字サイズ
+        // 「Press...」文字サイズ
         float press_w = 0.0f, press_h = 0.0f;
         SDL_GetTextureSize(press_tex_, &press_w, &press_h);
         // 横並びレイアウト：中央寄せ
@@ -346,7 +460,7 @@ protected:
         SDL_FRect text_dst { x0 + dino_w + gap, y0 + (group_h - text_h) * 0.5f, text_w, text_h };
         SDL_RenderTexture(r, sprite_tex_, &dino_src, &dino_dst);
         SDL_RenderTexture(r, title_tex_, nullptr, &text_dst);
-        // 下段（Press...）を少し下に、中央寄せ、点滅
+        // 「Press...」を少し下に、中央寄せ、点滅
         if (press_visible_) {
             const float press_x = (static_cast<float>(w) - press_w) * 0.5f;
             const float press_y = y0 + group_h + 40.0f;
