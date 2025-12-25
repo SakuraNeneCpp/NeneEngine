@@ -135,7 +135,7 @@ public:
             nnlog(std::string("switched to ") + current_node_);
             send_mail(NeneMail(this->global_settings->root_name, this->name, "show_all", ""));
         }
-        if(force) {
+        if(force && !initial) {
             nnlog(std::string("refreshed ") + current_node_);
         }
     }
