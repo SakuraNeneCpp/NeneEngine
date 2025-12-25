@@ -249,10 +249,10 @@ public:
     int window_y = 100;
     int window_w = 960;
     int window_h = 540;
-    // ゲーム共通値（例）
-    float ground_y = 420.0f;   // 地面の高さ（ピクセル）
-    float gravity  = 2400.0f;  // 重力（px/s^2）
-    float scroll_speed = 420.0f; // 横スクロール速度（px/s）
+    // ゲーム共通値
+    float ground_y = window_h - 120.0f;   // 地面の高さ（ピクセル）
+    float gravity  = 2400.0f;             // 重力（px/s^2）
+    float scroll_speed = 420.0f;          // 横スクロール速度（px/s）
     // ---- ユーザー拡張（float）----
     std::unordered_map<std::string, float> user_floats;
     // API

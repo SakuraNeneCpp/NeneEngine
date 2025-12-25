@@ -131,9 +131,12 @@ public:
         if (!node) nnthrow("switch_to: factory returned null: " + key);
         add_child(std::move(node));
         current_node_ = node_name;
-        if(!initial) { // 最初のツリー生成は切り替えではないのでログとツリーの表示はしない
+        if(!force && !initial) { // 最初のツリー生成とリフレッシュはツリーの表示はしない
             nnlog(std::string("switched to ") + current_node_);
             send_mail(NeneMail(this->global_settings->root_name, this->name, "show_all", ""));
+        }
+        if(force) {
+            nnlog(std::string("refreshed ") + current_node_);
         }
     }
     // 初期ノード指定（init_node内で呼ぶ用）

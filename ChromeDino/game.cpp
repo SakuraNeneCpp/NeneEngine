@@ -6,6 +6,9 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <sstream>
+#include <cstdlib>
+#include <random>
+#include <cmath>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneNode.hpp>
 
@@ -39,14 +42,19 @@ protected:
         anim_accum_ = 0.0f;
         anim_idx_ = 0;
         dead_ = false;
-        // CollisionWorld登録
+        // CollisionWorld登録（恐竜の凸近似）
         NeneColorPolygon poly;
         poly.owner_name = this->name;
+        // 88x96 のローカル座標で、凸多角形の8点近似（時計回り）
         poly.vertices = {
-            SDL_FPoint{ 0.0f, 0.0f },
-            SDL_FPoint{ w_,   0.0f },
-            SDL_FPoint{ w_,   h_   },
-            SDL_FPoint{ 0.0f, h_   },
+            SDL_FPoint{  6.0f, 28.0f }, // 尻尾/背中側（左上寄り）
+            SDL_FPoint{ 18.0f,  8.0f }, // 背中上
+            SDL_FPoint{ 60.0f,  6.0f }, // 頭上
+            SDL_FPoint{ 80.0f, 30.0f }, // 鼻先〜頭前
+            SDL_FPoint{ 84.0f, 72.0f }, // 体前
+            SDL_FPoint{ 66.0f, 94.0f }, // 足元前（右下）
+            SDL_FPoint{ 22.0f, 94.0f }, // 足元後（左下）
+            SDL_FPoint{  6.0f, 72.0f }, // 体後
         };
         poly.position = SDL_FPoint{ x_, y_ };
         poly.color = NenePolygonColor::Blue; // 味方属性
@@ -134,25 +142,92 @@ private:
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 };
 
+// 地面
+class Ground final : public NeneNode {
+public:
+    explicit Ground(std::string name) : NeneNode(std::move(name)) {}
+protected:
+    void init_node() override {
+        if (!asset_loader || !path_service || !global_settings) {
+            nnthrow("services not ready (asset_loader/path_service/global_settings)");
+        }
+        sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
+        if (!sprite_tex_) nnthrow("failed to load ground sprite texture");
+        float tw = 0.0f, th = 0.0f;
+        if (!SDL_GetTextureSize(sprite_tex_, &tw, &th)) {
+            nnthrow("SDL_GetTextureSize failed");
+        }
+        // ここだけ数値調整ポイント（見え方が違ったら kSrcH を変える）
+        constexpr float kSrcH = 28.0f;
+        src_ = SDL_FRect{ 0.0f, th - kSrcH, tw, kSrcH };
+        scroll_ = 0.0f;
+        // 背景扱いで奥へ
+        set_render_z(-100);
+    }
+    void handle_time_lapse(const float& dt) override {
+        if (!global_settings) return;
+        const float speed = global_settings->scroll_speed;
+        scroll_ += speed * dt;
+        // wrap（src_.w が 0 になることは無い想定）
+        if (src_.w > 1.0f) {
+            scroll_ = std::fmod(scroll_, src_.w);
+            if (scroll_ < 0.0f) scroll_ += src_.w;
+        }
+    }
+    void render(SDL_Renderer* r) override {
+        if (!r || !global_settings || !sprite_tex_) return;
+        const float ww = static_cast<float>(global_settings->window_w);
+        const float y  = global_settings->ground_y - 10;
+        const float src_x = scroll_;
+        const float src_y = src_.y;
+        const float src_h = src_.h;
+        const float src_w = src_.w;
+        // 画面幅ぶんを「srcのどこから切り出すか」で2回描画（隙間なし）
+        const float w1 = (src_x + ww <= src_w) ? ww : (src_w - src_x);
+        // 1枚目
+        SDL_FRect s1{ src_x, src_y, w1, src_h };
+        SDL_FRect d1{ 0.0f,  y,    w1, src_h };
+        SDL_RenderTexture(r, sprite_tex_, &s1, &d1);
+        // 2枚目（wrap する場合のみ）
+        const float w2 = ww - w1;
+        if (w2 > 0.0f) {
+            SDL_FRect s2{ 0.0f, src_y, w2, src_h };
+            SDL_FRect d2{ w1,   y,     w2, src_h };
+            SDL_RenderTexture(r, sprite_tex_, &s2, &d2);
+        }
+    }
+private:
+    SDL_Texture* sprite_tex_ = nullptr;
+    SDL_FRect src_{};
+    float scroll_ = 0.0f;
+};
+
+// サボテン
+#include <random>
 
 // サボテン
 class Cactus final : public NeneNode {
 public:
-    explicit Cactus(std::string name) : NeneNode(std::move(name)) {}
+    struct Variant {
+        SDL_FRect src;
+        float w;
+        float h;
+    };
+    Cactus(std::string name, Variant v)
+        : NeneNode(std::move(name)), variant_(v) {}
 protected:
     void init_node() override {
         if (!asset_loader || !path_service || !global_settings) nnthrow("services not ready (asset_loader/path_service/global_settings)");
         if (!collision_world) nnthrow("services not ready (collision_world)");
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
         if (!sprite_tex_) nnthrow("failed to load sprite texture");
-        // サイズ
-        w_ = 34.0f;
-        h_ = 70.0f;
+        // 種類ごとのサイズ・画像
+        w_ = variant_.w;
+        h_ = variant_.h;
+        src_ = variant_.src;
         // 画面右外から出現
         x_ = global_settings->window_w + spawn_margin_;
         y_ = global_settings->ground_y - h_;
-        // サボテンのソース画像
-        src_ = SDL_FRect{ 446.0f, 0.0f, 34.0f, 70.0f };
         // コライダー登録
         NeneColorPolygon poly;
         poly.owner_name = this->name;
@@ -167,16 +242,18 @@ protected:
         poly.layer = kLayerObstacle;
         poly.mask  = kMaskObstacleHits;
         poly.enabled = true;
-
         collider_id_ = collision_world->add_collider(std::move(poly));
+        speed_ = global_settings->scroll_speed;
     }
     void handle_time_lapse(const float& dt) override {
         if (!global_settings) return;
-        // 左へ流す（後で速度をglobal_settingsに入れる）
         x_ -= speed_ * dt;
-        if (collision_world && collider_id_ != 0) collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
-        // 画面外に出たらWorldに自分を消すよう依頼（自分ではremove_childできない）
-        if (x_ + w_ < -despawn_margin_) send_mail(NeneMail("world", this->name, "despawn", this->name));
+        if (collision_world && collider_id_ != 0) {
+            collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
+        }
+        if (x_ + w_ < -despawn_margin_) {
+            send_mail(NeneMail("world", this->name, "despawn", this->name));
+        }
     }
     void render(SDL_Renderer* r) override {
         if (!r || !sprite_tex_) return;
@@ -186,16 +263,17 @@ protected:
 private:
     static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
     static constexpr std::uint32_t kLayerObstacle = 1u << 1;
-    // プレイヤーと同じレイヤー
     static constexpr std::uint32_t kMaskObstacleHits = kLayerPlayer;
+    Variant variant_;
     SDL_Texture* sprite_tex_ = nullptr;
     SDL_FRect src_{};
     float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
-    float speed_ = 520.0f;
+    float speed_ = 0.0f;
     float spawn_margin_ = 40.0f;
     float despawn_margin_ = 60.0f;
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 };
+
 
 
 // 審判（CollisionWorldを監視し続ける）
@@ -240,7 +318,6 @@ protected:
         }
         prev_.swap(now);
     }
-
 private:
     using Id = NeneCollisionWorld::ColliderId;
     Id find_target_id_() const {
@@ -263,10 +340,13 @@ public:
     explicit World(std::string name) : NeneNode(std::move(name)) {}
 protected:
     void init_node() override {
+        add_child(std::make_unique<Ground>("ground"));
         add_child(std::make_unique<Dino>("dino"));
         add_child(std::make_unique<Referee>("referee"));
         spawn_accum_ = 0.0f;
         obstacle_seq_ = 0;
+        // 最初の出現までの時間（0.8〜1.6秒）
+        next_spawn_in_ = frand_(0.8f, 1.6f);
     }
     void handle_time_lapse(const float& dt) override {
         if (global_settings) {
@@ -274,9 +354,11 @@ protected:
             score += dt * 100.0f; // 毎秒100点
         }
         spawn_accum_ += dt;
-        if (spawn_accum_ >= spawn_interval_) {
+        if (spawn_accum_ >= next_spawn_in_) {
             spawn_accum_ = 0.0f;
             spawn_obstacle_();
+            // 次の間隔をランダムに（0.7〜1.7秒）
+            next_spawn_in_ = frand_(0.7f, 1.7f);
         }
     }
     void handle_nene_mail(const NeneMail& mail) override {
@@ -296,12 +378,46 @@ protected:
     }
 private:
     void spawn_obstacle_() {
+        std::uniform_int_distribution<int> dist(0, static_cast<int>(cactus_variants_.size()) - 1);
+        const auto v = cactus_variants_[dist(rng_)];
         const std::string name = "cactus_" + std::to_string(obstacle_seq_++);
-        add_child(std::make_unique<Cactus>(name));
+        add_child(std::make_unique<Cactus>(name, v));
     }
+    static float frand_(float a, float b) {
+        const float t = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
+        return a + (b - a) * t;
+    }
+    std::mt19937 rng_{ std::random_device{}() };
+    // サボテンの種類
+    float small_base_x = 446.0f;
+    float small_base_y = 0.0f;
+    float small_w = 34.0f;
+    float small_h = 70.0f;
+    float big_base_x = 650.0f;
+    float big_base_y = 0.0f;
+    float big_w = 50.5f;
+    float big_h = 96.0f;
+    std::vector<Cactus::Variant> cactus_variants_ = {
+        // 小
+        { SDL_FRect{ small_base_x+small_w*0, small_base_y, small_w, small_h }, small_w, small_h },
+        { SDL_FRect{ small_base_x+small_w*1, small_base_y, small_w, small_h }, small_w, small_h },
+        { SDL_FRect{ small_base_x+small_w*2, small_base_y, small_w, small_h }, small_w, small_h },
+        { SDL_FRect{ small_base_x+small_w*3, small_base_y, small_w, small_h }, small_w, small_h },
+        { SDL_FRect{ small_base_x+small_w*4, small_base_y, small_w, small_h }, small_w, small_h },
+        { SDL_FRect{ small_base_x+small_w*5, small_base_y, small_w, small_h }, small_w, small_h },
+        // 大
+        // { SDL_FRect{ big_base_x+big_w*0, big_base_y, big_w, big_h }, big_w, big_h },
+        // { SDL_FRect{ big_base_x+big_w*1, big_base_y, big_w, big_h }, big_w, big_h },
+        // { SDL_FRect{ big_base_x+big_w*2, big_base_y, big_w, big_h }, big_w, big_h },
+        // { SDL_FRect{ big_base_x+big_w*3, big_base_y, big_w, big_h }, big_w, big_h },
+        // 3つ組
+        // { SDL_FRect{ big_base_x+big_w*4, big_base_y, 100, big_h }, 100, big_h },
+
+    };
     float spawn_accum_ = 0.0f;
     float spawn_interval_ = 1.35f;
     int obstacle_seq_ = 0;
+    float next_spawn_in_ = 1.0f;
 };
 
 
@@ -322,15 +438,30 @@ protected:
         last_score_int_ = 0;
         // 手前に表示される
         set_render_z(1000);
+        // 点滅アニメーション設定
+        blink_accum_ = 0.0f;
+        press_visible_ = true;
     }
     void handle_time_lapse(const float& dt) override {
-        (void)dt;
         if (!global_settings) return;
         // スコア表示更新（score が変化したときだけテクスチャ更新）
         const int score_i = static_cast<int>(global_settings->getf("score", 0.0f));
         if (score_i != last_score_int_) {
             last_score_int_ = score_i;
             update_score_texture_(score_i);
+        }
+        // Game Over 中だけ「Press...」を点滅
+        const bool game_over = (global_settings->getf("game_over", 0.0f) > 0.5f);
+        if (game_over) {
+            blink_accum_ += dt;
+            if (blink_accum_ >= 0.5f) {
+                blink_accum_ = 0.0f;
+                press_visible_ = !press_visible_;
+            }
+        } else {
+            // Game Overじゃないときは常に表示状態に戻す
+            blink_accum_ = 0.0f;
+            press_visible_ = true;
         }
     }
     void render(SDL_Renderer* r) override {
@@ -361,7 +492,7 @@ protected:
             };
             SDL_RenderTexture(r, game_over_tex_, nullptr, &go_dst);
         }
-        if (restart_tex_) {
+        if (restart_tex_ && press_visible_) {
             float rw = 0.0f, rh = 0.0f;
             SDL_GetTextureSize(restart_tex_, &rw, &rh);
             SDL_FRect rs_dst{
@@ -396,6 +527,8 @@ private:
     SDL_Texture* game_over_tex_ = nullptr;
     SDL_Texture* restart_tex_ = nullptr;
     int last_score_int_ = 0;
+    float blink_accum_ = 0.0f;
+    bool  press_visible_ = true;
 };
 
 

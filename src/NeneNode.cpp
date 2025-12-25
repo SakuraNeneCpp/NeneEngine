@@ -298,6 +298,7 @@ void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
         } else if (ev.type == SDL_EVENT_WINDOW_RESIZED) {
             global_settings->window_w = ev.window.data1;
             global_settings->window_h = ev.window.data2;
+            global_settings->ground_y = ev.window.data2 - 120.0f;
         }
     }
 }
