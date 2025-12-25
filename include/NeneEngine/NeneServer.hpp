@@ -6,150 +6,277 @@
 #include <string>
 #include <unordered_map>
 #include <stdexcept>
+#include <vector>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <functional>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
-class NeneCollisionWorld2D_AABB_N {
+// --------------------
+// NeneColorPolygon (convex polygon collider)
+// --------------------
+enum class NenePolygonColor : std::uint8_t {
+    None = 0,
+    Red,
+    Blue,
+    Green,
+    Yellow,
+    Purple,
+    Cyan,
+    White,
+    Black,
+};
+
+class NeneColorPolygon {
 public:
     using ColliderId = std::uint32_t;
 
-    struct ColliderDesc {
-        std::string owner_name;     // "dino", "cactus_12" 等
-        SDL_FRect   aabb{};         // world座標のAABB
-        std::uint32_t layer = 1;    // 自分の属するレイヤ
-        std::uint32_t mask  = 0xFFFFFFFFu; // 衝突したい相手レイヤのビット集合
-        bool enabled = true;
-        bool is_trigger = true;     // 今回は検出だけなのでデフォルトtrue扱い
-    };
+public:
+    ColliderId id = 0;                    // world で採番
+    std::string owner_name;               // 任意 ("dino" 等)
+    std::vector<SDL_FPoint> vertices;     // ローカル座標の頂点（凸を仮定）
+    SDL_FPoint position{0.0f, 0.0f};      // ワールド座標の平行移動
+    bool enabled = true;
 
-    struct Hit {
-        ColliderId other_id = 0;
-        std::string other_owner;
-        SDL_FRect overlap{};        // 重なり領域（欲しければ）
-    };
+    // 属性：色（＝ダメージ等の属性に使うタグ）
+    NenePolygonColor color = NenePolygonColor::None;
+
+    // 任意：将来フィルタしたくなったら使える
+    std::uint32_t layer = 1;
+    std::uint32_t mask  = 0xFFFFFFFFu;
 
 public:
-    NeneCollisionWorld2D_AABB_N() = default;
+    // ワールド頂点を out に返す（local + position）
+    void compute_world_vertices(std::vector<SDL_FPoint>& out) const {
+        out.clear();
+        out.reserve(vertices.size());
+        for (const auto& v : vertices) {
+            out.push_back(SDL_FPoint{ v.x + position.x, v.y + position.y });
+        }
+    }
+};
 
-    // 追加・削除
-    ColliderId create_collider(const ColliderDesc& desc) {
-        const ColliderId id = next_id_++;
-        Entry e;
-        e.owner_name = desc.owner_name;
-        e.aabb = desc.aabb;
-        e.layer = desc.layer;
-        e.mask  = desc.mask;
-        e.enabled = desc.enabled;
-        e.is_trigger = desc.is_trigger;
-        colliders_.emplace(id, std::move(e));
-        return id;
+// --------------------
+// NeneCollisionWorld (O(N) collision against a target)
+//   - stores a list of NeneColorPolygon
+//   - position update by id
+//   - detect_collision(target) returns collided polygon if any
+// --------------------
+class NeneCollisionWorld {
+public:
+    using ColliderId = NeneColorPolygon::ColliderId;
+    using HitRef     = std::reference_wrapper<NeneColorPolygon>;
+    using ConstHitRef= std::reference_wrapper<const NeneColorPolygon>;
+
+public:
+    ColliderId add_collider(NeneColorPolygon collider) {
+        collider.id = next_id_++;
+        colliders_.push_back(std::move(collider));
+        return colliders_.back().id;
     }
 
-    void destroy_collider(ColliderId id) {
-        colliders_.erase(id);
-        if (target_id_ == id) target_id_ = kInvalid;
+    bool remove_collider(ColliderId id) {
+        for (std::size_t i = 0; i < colliders_.size(); ++i) {
+            if (colliders_[i].id == id) {
+                colliders_.erase(colliders_.begin() + static_cast<std::ptrdiff_t>(i));
+                return true;
+            }
+        }
+        return false;
     }
 
-    // 更新
-    bool set_aabb(ColliderId id, const SDL_FRect& aabb) {
-        auto it = colliders_.find(id);
-        if (it == colliders_.end()) return false;
-        it->second.aabb = aabb;
+    NeneColorPolygon* find(ColliderId id) {
+        for (auto& c : colliders_) if (c.id == id) return &c;
+        return nullptr;
+    }
+
+    const NeneColorPolygon* find(ColliderId id) const {
+        for (const auto& c : colliders_) if (c.id == id) return &c;
+        return nullptr;
+    }
+
+    bool set_position(ColliderId id, SDL_FPoint pos) {
+        auto* c = find(id);
+        if (!c) return false;
+        c->position = pos;
         return true;
     }
 
     bool set_enabled(ColliderId id, bool v) {
-        auto it = colliders_.find(id);
-        if (it == colliders_.end()) return false;
-        it->second.enabled = v;
+        auto* c = find(id);
+        if (!c) return false;
+        c->enabled = v;
         return true;
     }
 
-    // ターゲット指定
-    bool set_target(ColliderId id) {
-        if (colliders_.find(id) == colliders_.end()) return false;
-        target_id_ = id;
-        return true;
-    }
+    // 1つでも当たれば「最初に見つかった相手」を返す
+    // 当たらなければ std::nullopt
+    std::optional<HitRef> detect_collision(NeneColorPolygon& target) {
+        if (!target.enabled) return std::nullopt;
 
-    ColliderId target() const { return target_id_; }
+        // ターゲットのワールド頂点を準備
+        target.compute_world_vertices(tmpA_);
 
-    // 1フレーム分：ターゲットが何かと当たっているかを検出（O(N)）
-    // 返り値: 衝突相手の一覧（複数ヒットも返せる）
-    const std::vector<Hit>& step() {
-        hits_.clear();
-        if (target_id_ == kInvalid) return hits_;
-        auto itT = colliders_.find(target_id_);
-        if (itT == colliders_.end()) return hits_;
-        const Entry& t = itT->second;
-        if (!t.enabled) return hits_;
-        for (const auto& kv : colliders_) {
-            const ColliderId other_id = kv.first;
-            if (other_id == target_id_) continue;
-            const Entry& o = kv.second;
-            if (!o.enabled) continue;
-            // layer/mask フィルタ（必要なければ消してOK）
-            if ( (t.mask & o.layer) == 0 ) continue;
-            if ( (o.mask & t.layer) == 0 ) continue;
-            SDL_FRect overlap{};
-            if (intersects_aabb_(t.aabb, o.aabb, overlap)) {
-                Hit h;
-                h.other_id = other_id;
-                h.other_owner = o.owner_name;
-                h.overlap = overlap;
-                hits_.push_back(std::move(h));
+        // 頂点が少なすぎるものは無視
+        if (tmpA_.size() < 3) return std::nullopt;
+
+        // 早期：ターゲットAABB（任意だけど軽くなる）
+        const SDL_FRect aabbA = compute_aabb_(tmpA_);
+
+        for (auto& other : colliders_) {
+            if (!other.enabled) continue;
+            if (other.id == target.id && target.id != 0) continue;
+
+            // layer/mask フィルタ（不要なら削ってOK）
+            if ((target.mask & other.layer) == 0) continue;
+            if ((other.mask  & target.layer) == 0) continue;
+
+            other.compute_world_vertices(tmpB_);
+            if (tmpB_.size() < 3) continue;
+
+            const SDL_FRect aabbB = compute_aabb_(tmpB_);
+            if (!aabb_intersects_(aabbA, aabbB)) continue;
+
+            if (sat_intersects_convex_(tmpA_, tmpB_)) {
+                return HitRef{other};
             }
         }
-        return hits_;
-    }
-    const std::vector<Hit>& hits() const { return hits_; }
-    // デバッグ/参照用
-    std::optional<std::string> owner_name(ColliderId id) const {
-        auto it = colliders_.find(id);
-        if (it == colliders_.end()) return std::nullopt;
-        return it->second.owner_name;
+        return std::nullopt;
     }
 
+    std::optional<ConstHitRef> detect_collision(const NeneColorPolygon& target) const {
+        if (!target.enabled) return std::nullopt;
+
+        target.compute_world_vertices(tmpA_const_);
+        if (tmpA_const_.size() < 3) return std::nullopt;
+
+        const SDL_FRect aabbA = compute_aabb_(tmpA_const_);
+
+        for (const auto& other : colliders_) {
+            if (!other.enabled) continue;
+            if (other.id == target.id && target.id != 0) continue;
+
+            if ((target.mask & other.layer) == 0) continue;
+            if ((other.mask  & target.layer) == 0) continue;
+
+            other.compute_world_vertices(tmpB_const_);
+            if (tmpB_const_.size() < 3) continue;
+
+            const SDL_FRect aabbB = compute_aabb_(tmpB_const_);
+            if (!aabb_intersects_(aabbA, aabbB)) continue;
+
+            if (sat_intersects_convex_(tmpA_const_, tmpB_const_)) {
+                return ConstHitRef{other};
+            }
+        }
+        return std::nullopt;
+    }
+
+    const std::vector<NeneColorPolygon>& colliders() const { return colliders_; }
+
 private:
-    struct Entry {
-        std::string owner_name;
-        SDL_FRect aabb{};
-        std::uint32_t layer = 1;
-        std::uint32_t mask  = 0xFFFFFFFFu;
-        bool enabled = true;
-        bool is_trigger = true;
-    };
-    static bool intersects_aabb_(const SDL_FRect& a, const SDL_FRect& b, SDL_FRect& overlap_out) {
-        // min/max
-        const float ax0 = a.x;
-        const float ay0 = a.y;
-        const float ax1 = a.x + a.w;
-        const float ay1 = a.y + a.h;
-        const float bx0 = b.x;
-        const float by0 = b.y;
-        const float bx1 = b.x + b.w;
-        const float by1 = b.y + b.h;
-        // 分離判定（接触を「当たり」に含めたいなら < を <= に変える）
+    // ---- geometry helpers ----
+    static SDL_FRect compute_aabb_(const std::vector<SDL_FPoint>& v) {
+        float minx =  std::numeric_limits<float>::infinity();
+        float miny =  std::numeric_limits<float>::infinity();
+        float maxx = -std::numeric_limits<float>::infinity();
+        float maxy = -std::numeric_limits<float>::infinity();
+
+        for (const auto& p : v) {
+            if (p.x < minx) minx = p.x;
+            if (p.y < miny) miny = p.y;
+            if (p.x > maxx) maxx = p.x;
+            if (p.y > maxy) maxy = p.y;
+        }
+        return SDL_FRect{ minx, miny, (maxx - minx), (maxy - miny) };
+    }
+
+    static bool aabb_intersects_(const SDL_FRect& a, const SDL_FRect& b) {
+        const float ax0 = a.x, ay0 = a.y, ax1 = a.x + a.w, ay1 = a.y + a.h;
+        const float bx0 = b.x, by0 = b.y, bx1 = b.x + b.w, by1 = b.y + b.h;
+
         if (ax1 <= bx0) return false;
         if (bx1 <= ax0) return false;
         if (ay1 <= by0) return false;
         if (by1 <= ay0) return false;
-        const float ox0 = (ax0 > bx0) ? ax0 : bx0;
-        const float oy0 = (ay0 > by0) ? ay0 : by0;
-        const float ox1 = (ax1 < bx1) ? ax1 : bx1;
-        const float oy1 = (ay1 < by1) ? ay1 : by1;
-        overlap_out = SDL_FRect{ ox0, oy0, (ox1 - ox0), (oy1 - oy0) };
+        return true;
+    }
+
+    static float dot_(const SDL_FPoint& a, const SDL_FPoint& b) {
+        return a.x * b.x + a.y * b.y;
+    }
+
+    static SDL_FPoint sub_(const SDL_FPoint& a, const SDL_FPoint& b) {
+        return SDL_FPoint{ a.x - b.x, a.y - b.y };
+    }
+
+    // 軸(axis)に射影した min/max を返す
+    static void project_(const std::vector<SDL_FPoint>& poly, const SDL_FPoint& axis, float& outMin, float& outMax) {
+        float mn = dot_(poly[0], axis);
+        float mx = mn;
+        for (std::size_t i = 1; i < poly.size(); ++i) {
+            const float d = dot_(poly[i], axis);
+            if (d < mn) mn = d;
+            if (d > mx) mx = d;
+        }
+        outMin = mn;
+        outMax = mx;
+    }
+
+    static bool overlap_1d_(float minA, float maxA, float minB, float maxB) {
+        // 接触も「当たり」に含めるなら <= を < にする
+        if (maxA <= minB) return false;
+        if (maxB <= minA) return false;
+        return true;
+    }
+
+    // SAT: 凸多角形同士の交差判定
+    static bool sat_intersects_convex_(const std::vector<SDL_FPoint>& A,
+                                      const std::vector<SDL_FPoint>& B) {
+        // A のエッジ法線を軸に
+        if (!sat_check_axes_(A, B)) return false;
+        // B のエッジ法線を軸に
+        if (!sat_check_axes_(B, A)) return false;
+        return true;
+    }
+
+    static bool sat_check_axes_(const std::vector<SDL_FPoint>& P,
+                                const std::vector<SDL_FPoint>& Q) {
+        const std::size_t n = P.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const SDL_FPoint p0 = P[i];
+            const SDL_FPoint p1 = P[(i + 1) % n];
+            const SDL_FPoint e  = sub_(p1, p0);
+
+            // エッジの法線（正規化しなくてOK）
+            const SDL_FPoint axis{ -e.y, e.x };
+
+            float minP, maxP, minQ, maxQ;
+            project_(P, axis, minP, maxP);
+            project_(Q, axis, minQ, maxQ);
+
+            if (!overlap_1d_(minP, maxP, minQ, maxQ)) {
+                return false; // 分離軸あり
+            }
+        }
         return true;
     }
 
 private:
-    static constexpr ColliderId kInvalid = 0;
-    std::unordered_map<ColliderId, Entry> colliders_;
+    std::vector<NeneColorPolygon> colliders_;
     ColliderId next_id_ = 1;
-    ColliderId target_id_ = kInvalid;
-    std::vector<Hit> hits_;
+
+    // 一時バッファ（毎回確保しない）
+    std::vector<SDL_FPoint> tmpA_;
+    std::vector<SDL_FPoint> tmpB_;
+    // const版用（mutable にしても良いけど、ここでは分ける）
+    mutable std::vector<SDL_FPoint> tmpA_const_;
+    mutable std::vector<SDL_FPoint> tmpB_const_;
 };
+
 
 class NeneGlobalSettings {
 public:
@@ -255,8 +382,8 @@ public:
 };
 
 
-// MailServer
-class MailServer {
+// NeneMailServer
+class NeneMailServer {
 public:
     void push(const NeneMail& mail) { mail_queue_.push_back(mail); }
     void push(NeneMail&& mail) { mail_queue_.push_back(std::move(mail)); }
@@ -277,18 +404,18 @@ private:
 };
 
 
-// AssetLoader
-class AssetLoader {
+// NeneImageLoader
+class NeneImageLoader {
 public:
-    explicit AssetLoader(SDL_Renderer* renderer)
+    explicit NeneImageLoader(SDL_Renderer* renderer)
         : renderer_(renderer) {
         if (!renderer_) {
-            throw std::runtime_error("AssetLoader: renderer is null");
+            throw std::runtime_error("NeneImageLoader: renderer is null");
         }
         // SDL3_image では IMG_Init / IMG_Quit は不要
     }
 
-    ~AssetLoader() {
+    ~NeneImageLoader() {
         for (auto& [path, tex] : cache_) {
             if (tex) SDL_DestroyTexture(tex);
         }
@@ -302,7 +429,7 @@ public:
 
         SDL_Texture* tex = IMG_LoadTexture(renderer_, path.c_str());
         if (!tex) {
-            throw std::runtime_error(std::string("[AssetLoader] IMG_LoadTexture failed '")
+            throw std::runtime_error(std::string("[NeneImageLoader] IMG_LoadTexture failed '")
                                      + path + "': " + SDL_GetError());
         }
 
@@ -316,7 +443,7 @@ private:
 };
 
 
-// FontLoader
+// NeneFontLoader
 struct FontKey {
     std::string text;
     int fontSize;
@@ -344,10 +471,10 @@ struct FontKeyHash {
     }
 };
 
-class FontLoader {
+class NeneFontLoader {
 public:
-    explicit FontLoader(SDL_Renderer* renderer);
-    ~FontLoader();
+    explicit NeneFontLoader(SDL_Renderer* renderer);
+    ~NeneFontLoader();
 
     TTF_Font* get_font(const std::string& fontPath, int fontSize);
     SDL_Texture* get_text_texture(const std::string& fontPath, int fontSize,

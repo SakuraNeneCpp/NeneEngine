@@ -4,8 +4,6 @@
 #include <string>
 #include <utility>
 #include <stdexcept>
-#include <unordered_set>
-#include <sstream>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneNode.hpp>
 
@@ -25,8 +23,7 @@ protected:
         if (!asset_loader || !path_service || !global_settings) {
             nnthrow("services not ready (asset_loader/path_service/global_settings)");
         }
-        // ★ 新CollisionWorld（ポリゴン）
-        if (!collision_world) { // ← NeneNode側の注入名に合わせてね
+        if (!collision_world) {
             nnthrow("services not ready (collision_world)");
         }
 
@@ -52,32 +49,17 @@ protected:
         anim_idx_ = 0;
         dead_ = false;
 
-        // --- CollisionWorld 登録（凸四角形）---
-        // ローカル頂点（左上基準の矩形）。position に (x_, y_) を入れてワールドへ。
-        NeneColorPolygon poly;
-        poly.owner_name = this->name;             // "dino"
-        poly.vertices = {
-            SDL_FPoint{ 0.0f, 0.0f },
-            SDL_FPoint{ w_,   0.0f },
-            SDL_FPoint{ w_,   h_   },
-            SDL_FPoint{ 0.0f, h_   },
-        };
-        poly.position = SDL_FPoint{ x_, y_ };
-        poly.color = NenePolygonColor::Blue;      // 例：プレイヤー属性
-        poly.layer = kLayerPlayer;
-        poly.mask  = kMaskPlayerHits;
-        poly.enabled = true;
+        // --- CollisionWorld 登録 ---
+        NeneCollisionWorld::ColliderDesc desc;
+        desc.owner_name = this->name;     // "dino"
+        desc.aabb = hitbox();             // 初期AABB
+        desc.layer = kLayerPlayer;
+        desc.mask  = kMaskPlayerHits;     // 障害物だけ当てたい、など
+        desc.enabled = true;
+        collider_id_ = collision_world->create_collider(desc);
 
-        collider_id_ = collision_world->add_collider(std::move(poly));
-    }
-
-    void handle_sdl_event(const SDL_Event& ev) override {
-        if (dead_) return;
-        if (ev.type == SDL_EVENT_KEY_DOWN) {
-            if (ev.key.key == SDLK_SPACE || ev.key.key == SDLK_UP) {
-                try_jump_();
-            }
-        }
+        // ターゲットにする（Dinoだけ衝突検出したい前提）
+        collision_world->set_target(collider_id_);
     }
 
     void handle_time_lapse(const float& dt) override {
@@ -106,9 +88,9 @@ protected:
             on_ground_ = false;
         }
 
-        // --- CollisionWorldへ位置更新 ---
+        // --- CollisionWorldへAABB更新 ---
         if (collision_world && collider_id_ != 0) {
-            collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
+            collision_world->set_aabb(collider_id_, hitbox());
         }
     }
 
@@ -121,6 +103,10 @@ protected:
         SDL_RenderTexture(r, sprite_tex_, src, &dst);
     }
 
+    // エンジン側に「ノード破棄フック」があるならそこで destroy_collider すると安全
+    // 例: void on_destroy() override { ... } みたいな
+    // なければ一旦は「Dinoは消えない」前提でもOK
+
 private:
     void try_jump_() {
         if (!on_ground_) return;
@@ -130,7 +116,7 @@ private:
 
 private:
     // ---- collision filters (例) ----
-    static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
+    static constexpr std::uint32_t kLayerPlayer = 1u << 0;
     static constexpr std::uint32_t kLayerObstacle = 1u << 1;
     static constexpr std::uint32_t kMaskPlayerHits = kLayerObstacle;
 
@@ -157,13 +143,15 @@ private:
     // --- CollisionWorld 登録ID ---
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 
-    // ★ NeneNode に注入されている想定
-    // std::shared_ptr<NeneCollisionWorld> collision_world;
+    // NeneNode に注入されている想定（あなたの実装名に合わせる）
+    // NeneCollisionWorld* collision_world = nullptr;
 };
-
 
 // 障害物
 
+// 審判
+#include <unordered_set>
+#include <sstream>
 
 // 審判（衝突を監視して通知）
 class Referee final : public NeneNode {
@@ -172,7 +160,9 @@ public:
 
 protected:
     void init_node() override {
-        if (!collision_world) { // ← NeneNode側の注入名に合わせてね
+        // NeneServerにCollisionWorldを追加して、NeneNodeに注入されている想定
+        // 例: NeneNode::collision_world のようなメンバがある前提
+        if (!collision_world) {
             nnthrow("services not ready (collision_world)");
         }
     }
@@ -181,41 +171,32 @@ protected:
         (void)dt;
         if (!collision_world) return;
 
-        // まだターゲットIDが無いなら探す（生成順の都合で最初の数フレーム見つからなくてもOK）
-        if (target_id_ == 0) {
-            target_id_ = find_target_id_();
-            if (target_id_ == 0) return;
-        }
+        const auto& hits = collision_world->step();
 
-        NeneColorPolygon* target = collision_world->find(target_id_);
-        if (!target) { // 途中で消えた等
-            target_id_ = 0;
-            prev_.clear();
-            return;
-        }
-
+        // 1) いま当たっている相手集合を作る
         std::unordered_set<Id> now;
+        now.reserve(hits.size());
 
-        // 1件ヒット（仕様上、最初の1件）
-        if (auto hit = collision_world->detect_collision(*target)) {
-            const NeneColorPolygon& other = hit->get();
-            now.insert(other.id);
+        for (const auto& h : hits) {
+            now.insert(h.other_id);
 
-            // 新規衝突（enter）のみ通知
-            if (prev_.find(other.id) == prev_.end()) {
+            // 2) 新規衝突（enter）のみ通知（毎フレームspamしたくないので）
+            if (prev_.find(h.other_id) == prev_.end()) {
+                // bodyは自由。ここでは "target=dino other=xxx" 形式にする
                 std::ostringstream oss;
-                oss << "target=" << target_name_
-                    << " other=" << other.owner_name
-                    << " color=" << static_cast<int>(other.color);
+                oss << "target=" << target_name_ << " other=" << h.other_owner;
 
                 broadcast_("collision_enter", oss.str());
             }
         }
 
-        // （任意）離脱通知が欲しければ
+        // 3) （任意）離脱通知が欲しければ
         // for (auto old_id : prev_) {
         //     if (now.find(old_id) == now.end()) {
-        //         broadcast_("collision_exit", "target=" + target_name_);
+        //         auto owner = collision_world->owner_name(old_id);
+        //         std::ostringstream oss;
+        //         oss << "target=" << target_name_ << " other=" << (owner ? *owner : "(unknown)");
+        //         broadcast_("collision_exit", oss.str());
         //     }
         // }
 
@@ -226,28 +207,17 @@ private:
     using Id = NeneCollisionWorld::ColliderId;
 
     void broadcast_(const std::string& subject, const std::string& body) {
-        // ブロードキャストは to=nullopt のコンストラクタを使う
-        send_mail(NeneMail(this->name, subject, body));
-    }
-
-    Id find_target_id_() const {
-        if (!collision_world) return 0;
-        for (const auto& c : collision_world->colliders()) {
-            if (!c.enabled) continue;
-            if (c.owner_name == target_name_) {
-                return c.id;
-            }
-        }
-        return 0;
+        // ブロードキャスト宛先（エンジン仕様に合わせて変えてOK）
+        send_mail(NeneMail("*", this->name, subject, body));
     }
 
 private:
     std::unordered_set<Id> prev_;
-    std::string target_name_ = "dino";
-    Id target_id_ = 0;
+    std::string target_name_ = "dino"; // 必要ならRefereeに渡してもOK
 
-    // ★ NeneNode に注入されている想定
-    // std::shared_ptr<NeneCollisionWorld> collision_world;
+    // これがNeneNodeに注入されている想定（名前はあなたの実装に合わせて）
+    // NeneNode側に public/protected で用意してください:
+    //   NeneCollisionWorld* collision_world = nullptr;
 };
 
 
