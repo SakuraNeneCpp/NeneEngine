@@ -13,49 +13,35 @@
 class Dino final : public NeneNode {
 public:
     explicit Dino(std::string name) : NeneNode(std::move(name)) {}
-
     SDL_FRect hitbox() const { return SDL_FRect{ x_, y_, w_, h_ }; }
-
     void set_dead(bool v) { dead_ = v; }
     bool is_dead() const { return dead_; }
-
 protected:
     void init_node() override {
-        // services
-        if (!asset_loader || !path_service || !global_settings) {
-            nnthrow("services not ready (asset_loader/path_service/global_settings)");
-        }
-        // ★ 新CollisionWorld（ポリゴン）
-        if (!collision_world) { // ← NeneNode側の注入名に合わせてね
-            nnthrow("services not ready (collision_world)");
-        }
-
+        // 念のため必要なサービスが注入されているか確認する
+        if (!asset_loader || !path_service || !global_settings) nnthrow("services not ready (asset_loader/path_service/global_settings)");
+        if (!collision_world) nnthrow("services not ready (collision_world)");
+        // テクスチャ
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
         if (!sprite_tex_) nnthrow("failed to load dino sprite texture");
-
-        // サイズ
         w_ = 88.0f;
         h_ = 96.0f;
-
         // 初期位置
         x_ = 120.0f;
         y_ = global_settings->ground_y - h_;
-
         // 走りアニメ
         run_src_[0] = SDL_FRect{ 1514.2f, 0.0f, 88.0f, 96.0f };
         run_src_[1] = SDL_FRect{ 1602.2f, 0.0f, 88.0f, 96.0f };
         jump_src_ = run_src_[0];
-
+        // 状態
         on_ground_ = true;
         vy_ = 0.0f;
         anim_accum_ = 0.0f;
         anim_idx_ = 0;
         dead_ = false;
-
-        // --- CollisionWorld 登録（凸四角形）---
-        // ローカル頂点（左上基準の矩形）。position に (x_, y_) を入れてワールドへ。
+        // CollisionWorld登録
         NeneColorPolygon poly;
-        poly.owner_name = this->name;             // "dino"
+        poly.owner_name = this->name;
         poly.vertices = {
             SDL_FPoint{ 0.0f, 0.0f },
             SDL_FPoint{ w_,   0.0f },
@@ -63,28 +49,27 @@ protected:
             SDL_FPoint{ 0.0f, h_   },
         };
         poly.position = SDL_FPoint{ x_, y_ };
-        poly.color = NenePolygonColor::Blue;      // 例：プレイヤー属性
+        poly.color = NenePolygonColor::Blue;
         poly.layer = kLayerPlayer;
         poly.mask  = kMaskPlayerHits;
         poly.enabled = true;
-
         collider_id_ = collision_world->add_collider(std::move(poly));
     }
-
+    // 外部イベント
     void handle_sdl_event(const SDL_Event& ev) override {
         if (dead_) return;
+        // スペースキーでジャンプ
         if (ev.type == SDL_EVENT_KEY_DOWN) {
             if (ev.key.key == SDLK_SPACE || ev.key.key == SDLK_UP) {
                 try_jump_();
             }
         }
     }
-
+    // タイムラプス
     void handle_time_lapse(const float& dt) override {
         if (!global_settings) return;
         if (dead_) return;
-
-        // 走りアニメ
+        // 地上にいれば走るアニメーションを再生し続ける
         if (on_ground_) {
             anim_accum_ += dt;
             if (anim_accum_ >= run_frame_sec_) {
@@ -92,11 +77,9 @@ protected:
                 anim_idx_ = (anim_idx_ + 1) % 2;
             }
         }
-
-        // 物理
+        // ジャンプ中なら物理演算に伴って座標を更新し続ける
         vy_ += global_settings->gravity * dt;
         y_  += vy_ * dt;
-
         const float ground_y = global_settings->ground_y - h_;
         if (y_ >= ground_y) {
             y_ = ground_y;
@@ -105,109 +88,152 @@ protected:
         } else {
             on_ground_ = false;
         }
-
-        // --- CollisionWorldへ位置更新 ---
+        // コライダーの位置も更新する
         if (collision_world && collider_id_ != 0) {
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
         }
     }
-
+    // レンダリング
     void render(SDL_Renderer* r) override {
         if (!r) return;
         if (!sprite_tex_) return;
-
         const SDL_FRect* src = (!on_ground_) ? &jump_src_ : &run_src_[anim_idx_];
         SDL_FRect dst { x_, y_, w_, h_ };
         SDL_RenderTexture(r, sprite_tex_, src, &dst);
     }
-
 private:
     void try_jump_() {
         if (!on_ground_) return;
         on_ground_ = false;
         vy_ = -jump_speed_;
     }
-
-private:
-    // ---- collision filters (例) ----
+    // コライダー設定
     static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
     static constexpr std::uint32_t kLayerObstacle = 1u << 1;
     static constexpr std::uint32_t kMaskPlayerHits = kLayerObstacle;
-
-private:
+    // テクスチャ
     SDL_Texture* sprite_tex_ = nullptr;
     SDL_FRect run_src_[2]{};
     SDL_FRect jump_src_{};
-
+    // 位置とサイズ
     float x_ = 0.0f;
     float y_ = 0.0f;
     float w_ = 0.0f;
     float h_ = 0.0f;
-
+    // 状態
     float vy_ = 0.0f;
     bool  on_ground_ = true;
     bool  dead_ = false;
-
+    // アニメーション設定
     float anim_accum_ = 0.0f;
     int   anim_idx_ = 0;
-
+    // 運動設定
     float jump_speed_    = 900.0f;
     float run_frame_sec_ = 0.10f;
-
-    // --- CollisionWorld 登録ID ---
+    // CollisionWorld登録ID
     NeneCollisionWorld::ColliderId collider_id_ = 0;
-
-    // ★ NeneNode に注入されている想定
-    // std::shared_ptr<NeneCollisionWorld> collision_world;
 };
 
 
-// 障害物
+// サボテン
+class Cactus final : public NeneNode {
+public:
+    explicit Cactus(std::string name) : NeneNode(std::move(name)) {}
+protected:
+    void init_node() override {
+        if (!asset_loader || !path_service || !global_settings) nnthrow("services not ready (asset_loader/path_service/global_settings)");
+        if (!collision_world) nnthrow("services not ready (collision_world)");
+
+        sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
+        if (!sprite_tex_) nnthrow("failed to load sprite texture");
+        // まずは適当なサイズ（あとでスプライトに合わせて調整でOK）
+        w_ = 34.0f;
+        h_ = 70.0f;
+        // 画面右外から出現
+        x_ = global_settings->window_w + spawn_margin_;
+        y_ = global_settings->ground_y - h_;
+        // ★ サボテンのソース矩形（仮：適切な座標に調整してください）
+        // 例：ChromeDinoスプライトの cactus を指すrectに差し替え
+        src_ = SDL_FRect{ 446.0f, 0.0f, 34.0f, 70.0f };
+        // コライダー登録（矩形）
+        NeneColorPolygon poly;
+        poly.owner_name = this->name;
+        poly.vertices = {
+            SDL_FPoint{ 0.0f, 0.0f },
+            SDL_FPoint{ w_,   0.0f },
+            SDL_FPoint{ w_,   h_   },
+            SDL_FPoint{ 0.0f, h_   },
+        };
+        poly.position = SDL_FPoint{ x_, y_ };
+        poly.color = NenePolygonColor::Red; // 例：ダメージ属性
+        poly.layer = kLayerObstacle;
+        poly.mask  = kMaskObstacleHits;
+        poly.enabled = true;
+
+        collider_id_ = collision_world->add_collider(std::move(poly));
+    }
+    void handle_time_lapse(const float& dt) override {
+        if (!global_settings) return;
+        // 左へ流す（まずは固定速度。後でglobal_settingsに入れると気持ちいい）
+        x_ -= speed_ * dt;
+        if (collision_world && collider_id_ != 0) collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
+        // 画面外に出たら World に自分を消すよう依頼（自分ではremove_childできないため）
+        if (x_ + w_ < -despawn_margin_) send_mail(NeneMail("world", this->name, "despawn", this->name));
+    }
+    void render(SDL_Renderer* r) override {
+        if (!r || !sprite_tex_) return;
+        SDL_FRect dst{ x_, y_, w_, h_ };
+        SDL_RenderTexture(r, sprite_tex_, &src_, &dst);
+    }
+private:
+    static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
+    static constexpr std::uint32_t kLayerObstacle = 1u << 1;
+    // 障害物はプレイヤーにだけ当たればいい想定
+    static constexpr std::uint32_t kMaskObstacleHits = kLayerPlayer;
+
+    SDL_Texture* sprite_tex_ = nullptr;
+    SDL_FRect src_{};
+    float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
+    float speed_ = 520.0f;
+    float spawn_margin_ = 40.0f;
+    float despawn_margin_ = 60.0f;
+    NeneCollisionWorld::ColliderId collider_id_ = 0;
+};
 
 
-// 審判（衝突を監視して通知）
+// 審判（CollisionWorldを監視し続ける）
 class Referee final : public NeneNode {
 public:
     explicit Referee(std::string name) : NeneNode(std::move(name)) {}
-
 protected:
     void init_node() override {
-        if (!collision_world) { // ← NeneNode側の注入名に合わせてね
-            nnthrow("services not ready (collision_world)");
-        }
+        if (!collision_world) nnthrow("services not ready (collision_world)");
     }
-
     void handle_time_lapse(const float& dt) override {
         (void)dt;
         if (!collision_world) return;
-
         // まだターゲットIDが無いなら探す（生成順の都合で最初の数フレーム見つからなくてもOK）
         if (target_id_ == 0) {
             target_id_ = find_target_id_();
             if (target_id_ == 0) return;
         }
-
         NeneColorPolygon* target = collision_world->find(target_id_);
         if (!target) { // 途中で消えた等
             target_id_ = 0;
             prev_.clear();
             return;
         }
-
         std::unordered_set<Id> now;
-
         // 1件ヒット（仕様上、最初の1件）
         if (auto hit = collision_world->detect_collision(*target)) {
             const NeneColorPolygon& other = hit->get();
             now.insert(other.id);
-
             // 新規衝突（enter）のみ通知
             if (prev_.find(other.id) == prev_.end()) {
                 std::ostringstream oss;
                 oss << "target=" << target_name_
                     << " other=" << other.owner_name
                     << " color=" << static_cast<int>(other.color);
-
                 broadcast_("collision_enter", oss.str());
             }
         }
@@ -224,12 +250,10 @@ protected:
 
 private:
     using Id = NeneCollisionWorld::ColliderId;
-
     void broadcast_(const std::string& subject, const std::string& body) {
         // ブロードキャストは to=nullopt のコンストラクタを使う
         send_mail(NeneMail(this->name, subject, body));
     }
-
     Id find_target_id_() const {
         if (!collision_world) return 0;
         for (const auto& c : collision_world->colliders()) {
@@ -245,9 +269,6 @@ private:
     std::unordered_set<Id> prev_;
     std::string target_name_ = "dino";
     Id target_id_ = 0;
-
-    // ★ NeneNode に注入されている想定
-    // std::shared_ptr<NeneCollisionWorld> collision_world;
 };
 
 
@@ -259,7 +280,6 @@ private:
 class World final : public NeneNode {
 public:
     explicit World(std::string name) : NeneNode(std::move(name)) {}
-
 protected:
     void init_node(){
         add_child(std::make_unique<Dino>("dino"));
@@ -274,7 +294,6 @@ protected:
 class PlayScene final : public NeneNode {
 public:
     explicit PlayScene(std::string name) : NeneNode(std::move(name)) {}
-
 protected:
     void init_node(){
         add_child(std::make_unique<World>("world"));
@@ -366,7 +385,6 @@ private:
 class SceneSwitch final : public NeneSwitch {
 public:
     explicit SceneSwitch(std::string name) : NeneSwitch(std::move(name)) {}
-
 protected:
     void init_node() override {
         register_node("title_scene", [] {
