@@ -4,21 +4,37 @@
 ## ねねエンジンの仕組み
 ![仕組み](figs/img1.png "仕組み")
 
+### 木構造+パルス伝播+共有サービス注入
+
+### ノード間通信: 黒板とメール
+
+### 特殊なノード(随時追加)
+- NeneRoot
+- NeneSwitch
+
+### 各種サービス(随時追加)
+- NeneImageLoader
+- NeneFontLoader
+- NeneCollisionWorld
+
 ## NeneNodeGallery
+ノードのテンプレートなどをまとめたHTML.
+
 [NeneNodeGallery](./NeneNodeGallery/main.html)
+
 ↑ ソースコードが開く. ブラウザで表示してほしいのに...
 
 ## リリースノート
 
 ### ver. 1.0.0
-- 基本的な「木構造+再帰伝播」方式の仕組みを実装しました.
-- キャッシングロード装置, アセットローダーとフォントローダーを実装しました.
-- 内部イベント伝送システム `NeneMail` を実装しました.
+
 
 ## TODO
 ### ノード
 - 物理演算オブジェクト `NenePhysicalObject` (重力と衝突判定を受ける)
+- デバッグノード (コライダーの可視化など)
+- インプットマネージャ (入力をNeneMailに翻訳してブロードキャストする)
 ### サーバ
-- 衝突判定装置 `NeneCollisionWorld`
-- 設定記憶装置 `NeneSetting`
-- セーブ装置 `NeneSave`
+- セーブサービス `NeneSave`
+### その他
+- アニメーション実装を簡単にしたい

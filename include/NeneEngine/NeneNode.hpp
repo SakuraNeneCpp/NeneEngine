@@ -51,7 +51,7 @@ protected:
     std::shared_ptr<NeneImageLoader> asset_loader;
     std::shared_ptr<NeneFontLoader> font_loader;
     std::shared_ptr<PathService> path_service;
-    std::shared_ptr<NeneGlobalSettings> global_settings;
+    std::shared_ptr<NeneBlackboard> blackboard;
     std::shared_ptr<NeneCollisionWorld> collision_world;
     // 親ノード
     NeneNode* parent = nullptr;
@@ -133,7 +133,7 @@ public:
         current_node_ = node_name;
         if(!force && !initial) { // 最初のツリー生成とリフレッシュはツリーの表示はしない
             nnlog(std::string("switched to ") + current_node_);
-            send_mail(NeneMail(this->global_settings->root_name, this->name, "show_all", ""));
+            send_mail(NeneMail(this->blackboard->root_name, this->name, "show_all", ""));
         }
         if(force && !initial) {
             nnlog(std::string("refreshed ") + current_node_);

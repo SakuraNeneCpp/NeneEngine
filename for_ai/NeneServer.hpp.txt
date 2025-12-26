@@ -240,7 +240,7 @@ private:
 };
 
 
-class NeneGlobalSettings {
+class NeneBlackboard {
 public:
     // 必須項目
     std::string root_name;

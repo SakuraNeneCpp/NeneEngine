@@ -22,7 +22,7 @@ public:
 protected:
     void init_node() override {
         // 念のため必要なサービスが注入されているか確認する
-        if (!asset_loader || !path_service || !global_settings) nnthrow("services not ready (asset_loader/path_service/global_settings)");
+        if (!asset_loader || !path_service || !blackboard) nnthrow("services not ready (asset_loader/path_service/blackboard)");
         if (!collision_world) nnthrow("services not ready (collision_world)");
         // テクスチャ
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
@@ -31,7 +31,7 @@ protected:
         h_ = 96.0f;
         // 初期位置
         x_ = 120.0f;
-        y_ = global_settings->ground_y - h_;
+        y_ = blackboard->ground_y - h_;
         // 走りアニメ
         run_src_[0] = SDL_FRect{ 1514.2f, 0.0f, 88.0f, 96.0f };
         run_src_[1] = SDL_FRect{ 1602.2f, 0.0f, 88.0f, 96.0f };
@@ -61,6 +61,10 @@ protected:
         poly.layer = kLayerPlayer;
         poly.mask  = kMaskPlayerHits;
         poly.enabled = true;
+        // コライダー可視化設定
+        poly.debug_draw = true;
+        poly.debug_alpha = 0.25f;
+        // コライダー登録
         collider_id_ = collision_world->add_collider(std::move(poly));
     }
     // 外部イベント
@@ -75,7 +79,7 @@ protected:
     }
     // タイムラプス
     void handle_time_lapse(const float& dt) override {
-        if (!global_settings) return;
+        if (!blackboard) return;
         if (dead_) return;
         // 地上にいれば走るアニメーションを再生し続ける
         if (on_ground_) {
@@ -85,10 +89,10 @@ protected:
                 anim_idx_ = (anim_idx_ + 1) % 2;
             }
         }
-        // ジャンプ中なら物理演算に伴って座標を更新し続ける
-        vy_ += global_settings->gravity * dt;
+        // ジャンプ中なら物理演算に従って座標を更新し続ける
+        vy_ += blackboard->gravity * dt;
         y_  += vy_ * dt;
-        const float ground_y = global_settings->ground_y - h_;
+        const float ground_y = blackboard->ground_y - h_;
         if (y_ >= ground_y) {
             y_ = ground_y;
             vy_ = 0.0f;
@@ -108,6 +112,14 @@ protected:
         const SDL_FRect* src = (!on_ground_) ? &jump_src_ : &run_src_[anim_idx_];
         SDL_FRect dst { x_, y_, w_, h_ };
         SDL_RenderTexture(r, sprite_tex_, src, &dst);
+        // コライダー可視化
+        if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
+            if (collision_world && collider_id_ != 0) {
+                if (auto* c = collision_world->find(collider_id_)) {
+                    c->debug_render_filled(r);
+                }
+            }
+        }
     }
 private:
     void try_jump_() {
@@ -148,8 +160,8 @@ public:
     explicit Ground(std::string name) : NeneNode(std::move(name)) {}
 protected:
     void init_node() override {
-        if (!asset_loader || !path_service || !global_settings) {
-            nnthrow("services not ready (asset_loader/path_service/global_settings)");
+        if (!asset_loader || !path_service || !blackboard) {
+            nnthrow("services not ready (asset_loader/path_service/blackboard)");
         }
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
         if (!sprite_tex_) nnthrow("failed to load ground sprite texture");
@@ -165,8 +177,8 @@ protected:
         set_render_z(-100);
     }
     void handle_time_lapse(const float& dt) override {
-        if (!global_settings) return;
-        const float speed = global_settings->scroll_speed;
+        if (!blackboard) return;
+        const float speed = blackboard->scroll_speed;
         scroll_ += speed * dt;
         // wrap（src_.w が 0 になることは無い想定）
         if (src_.w > 1.0f) {
@@ -175,9 +187,9 @@ protected:
         }
     }
     void render(SDL_Renderer* r) override {
-        if (!r || !global_settings || !sprite_tex_) return;
-        const float ww = static_cast<float>(global_settings->window_w);
-        const float y  = global_settings->ground_y - 10;
+        if (!r || !blackboard || !sprite_tex_) return;
+        const float ww = static_cast<float>(blackboard->window_w);
+        const float y  = blackboard->ground_y - 10;
         const float src_x = scroll_;
         const float src_y = src_.y;
         const float src_h = src_.h;
@@ -203,9 +215,6 @@ private:
 };
 
 // サボテン
-#include <random>
-
-// サボテン
 class Cactus final : public NeneNode {
 public:
     struct Variant {
@@ -217,7 +226,7 @@ public:
         : NeneNode(std::move(name)), variant_(v) {}
 protected:
     void init_node() override {
-        if (!asset_loader || !path_service || !global_settings) nnthrow("services not ready (asset_loader/path_service/global_settings)");
+        if (!asset_loader || !path_service || !blackboard) nnthrow("services not ready (asset_loader/path_service/blackboard)");
         if (!collision_world) nnthrow("services not ready (collision_world)");
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
         if (!sprite_tex_) nnthrow("failed to load sprite texture");
@@ -226,8 +235,8 @@ protected:
         h_ = variant_.h;
         src_ = variant_.src;
         // 画面右外から出現
-        x_ = global_settings->window_w + spawn_margin_;
-        y_ = global_settings->ground_y - h_;
+        x_ = blackboard->window_w + spawn_margin_;
+        y_ = blackboard->ground_y - h_;
         // コライダー登録
         NeneColorPolygon poly;
         poly.owner_name = this->name;
@@ -242,11 +251,15 @@ protected:
         poly.layer = kLayerObstacle;
         poly.mask  = kMaskObstacleHits;
         poly.enabled = true;
+        // コライダー可視化設定
+        poly.debug_draw = true;
+        poly.debug_alpha = 0.25f;
+        // コライダー登録
         collider_id_ = collision_world->add_collider(std::move(poly));
-        speed_ = global_settings->scroll_speed;
+        speed_ = blackboard->scroll_speed;
     }
     void handle_time_lapse(const float& dt) override {
-        if (!global_settings) return;
+        if (!blackboard) return;
         x_ -= speed_ * dt;
         if (collision_world && collider_id_ != 0) {
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
@@ -259,6 +272,14 @@ protected:
         if (!r || !sprite_tex_) return;
         SDL_FRect dst{ x_, y_, w_, h_ };
         SDL_RenderTexture(r, sprite_tex_, &src_, &dst);
+        // コライダー可視化
+        if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
+            if (collision_world && collider_id_ != 0) {
+                if (auto* c = collision_world->find(collider_id_)) {
+                    c->debug_render_filled(r);
+                }
+            }
+        }
     }
 private:
     static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
@@ -349,8 +370,8 @@ protected:
         next_spawn_in_ = frand_(0.8f, 1.6f);
     }
     void handle_time_lapse(const float& dt) override {
-        if (global_settings) {
-            float& score = global_settings->ensuref("score", 0.0f);
+        if (blackboard) {
+            float& score = blackboard->ensuref("score", 0.0f);
             score += dt * 100.0f; // 毎秒100点
         }
         spawn_accum_ += dt;
@@ -372,7 +393,7 @@ protected:
             // 障害物の生成を停止
             spawn_accum_ = 0.0f;
             // ゲームオーバーに移行
-            if (global_settings) global_settings->setf("game_over", 1.0f);
+            if (blackboard) blackboard->setf("game_over", 1.0f);
             return;
         }
     }
@@ -427,7 +448,7 @@ public:
     explicit Overlay(std::string name) : NeneNode(std::move(name)) {}
 protected:
     void init_node() override {
-        if (!font_loader || !path_service || !global_settings) nnthrow("services not ready (font_loader/path_service/global_settings)");
+        if (!font_loader || !path_service || !blackboard) nnthrow("services not ready (font_loader/path_service/blackboard)");
         font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         // 固定テキストは一度だけ作ればOK
         game_over_tex_ = font_loader->get_text_texture(font_path_, 64, "Game Over", SDL_Color{255,255,255,255});
@@ -443,15 +464,15 @@ protected:
         press_visible_ = true;
     }
     void handle_time_lapse(const float& dt) override {
-        if (!global_settings) return;
+        if (!blackboard) return;
         // スコア表示更新（score が変化したときだけテクスチャ更新）
-        const int score_i = static_cast<int>(global_settings->getf("score", 0.0f));
+        const int score_i = static_cast<int>(blackboard->getf("score", 0.0f));
         if (score_i != last_score_int_) {
             last_score_int_ = score_i;
             update_score_texture_(score_i);
         }
         // Game Over 中だけ「Press...」を点滅
-        const bool game_over = (global_settings->getf("game_over", 0.0f) > 0.5f);
+        const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
         if (game_over) {
             blink_accum_ += dt;
             if (blink_accum_ >= 0.5f) {
@@ -465,7 +486,7 @@ protected:
         }
     }
     void render(SDL_Renderer* r) override {
-        if (!r || !global_settings) return;
+        if (!r || !blackboard) return;
         if (!score_tex_) return;
         int w = 0, h = 0;
         if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
@@ -480,7 +501,7 @@ protected:
         };
         SDL_RenderTexture(r, score_tex_, nullptr, &score_dst);
         // Game Over文字
-        const bool game_over = (global_settings->getf("game_over", 0.0f) > 0.5f);
+        const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
         if (!game_over) return;
         if (game_over_tex_) {
             float gw = 0.0f, gh = 0.0f;
@@ -504,8 +525,8 @@ protected:
         }
     }
     void handle_sdl_event(const SDL_Event& ev) override {
-        if (!global_settings) return;
-        const bool game_over = (global_settings->getf("game_over", 0.0f) > 0.5f);
+        if (!blackboard) return;
+        const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
         if (!game_over) return;
         if (ev.type == SDL_EVENT_KEY_DOWN) {
             if (ev.key.key == SDLK_SPACE) {
@@ -538,9 +559,11 @@ public:
     explicit PlayScene(std::string name) : NeneNode(std::move(name)) {}
 protected:
     void init_node(){
-        if (global_settings) {
-            global_settings->setf("score", 0.0f);
-            global_settings->setf("game_over", 0.0f);
+        if (blackboard) {
+            blackboard->setf("score", 0.0f);
+            blackboard->setf("game_over", 0.0f);
+            // コライダー可視化
+            blackboard->setf("show_hitbox", 1.0f);
         }
         if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
         else nnerr("no collision world");

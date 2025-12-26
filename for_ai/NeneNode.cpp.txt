@@ -162,7 +162,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     child->asset_loader = this->asset_loader;
     child->font_loader  = this->font_loader;
     child->path_service = this->path_service;
-    child->global_settings = this->global_settings;
+    child->blackboard = this->blackboard;
     child->collision_world = this->collision_world;
     // 親を設定
     child->parent = this;
@@ -230,13 +230,13 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
     this->asset_loader    = std::make_shared<NeneImageLoader>(renderer);
     this->font_loader     = std::make_shared<NeneFontLoader>(renderer);
     this->path_service    = std::make_shared<PathService>();
-    this->global_settings = std::make_shared<NeneGlobalSettings>();
-    if (this->global_settings) {
-        this->global_settings->root_name = this->name;
-        this->global_settings->window_x = x;
-        this->global_settings->window_y = y;
-        this->global_settings->window_w = w;
-        this->global_settings->window_h = h;
+    this->blackboard = std::make_shared<NeneBlackboard>();
+    if (this->blackboard) {
+        this->blackboard->root_name = this->name;
+        this->blackboard->window_x = x;
+        this->blackboard->window_y = y;
+        this->blackboard->window_w = w;
+        this->blackboard->window_h = h;
     }
     this->collision_world = std::make_shared<NeneCollisionWorld>();
 }
@@ -291,13 +291,13 @@ void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
         running = false;
         return;
     }
-    if (global_settings) {
+    if (blackboard) {
         if (ev.type == SDL_EVENT_WINDOW_MOVED) {
-            global_settings->window_x = ev.window.data1;
-            global_settings->window_y = ev.window.data2;
+            blackboard->window_x = ev.window.data1;
+            blackboard->window_y = ev.window.data2;
         } else if (ev.type == SDL_EVENT_WINDOW_RESIZED) {
-            global_settings->window_w = ev.window.data1;
-            global_settings->window_h = ev.window.data2;
+            blackboard->window_w = ev.window.data1;
+            blackboard->window_h = ev.window.data2;
         }
     }
 }

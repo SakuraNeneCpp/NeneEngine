@@ -15,9 +15,8 @@
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
-// --------------------
-// NeneColorPolygon (convex polygon collider)
-// --------------------
+// NeneColorPolygon
+// 凸多角形ヒットボックス
 enum class NenePolygonColor : std::uint8_t {
     None = 0,
     Red,
@@ -30,23 +29,38 @@ enum class NenePolygonColor : std::uint8_t {
     Black,
 };
 
+static inline SDL_FColor nene_to_fcolor(NenePolygonColor c, float alpha) {
+    switch (c) {
+        case NenePolygonColor::Red:    return SDL_FColor{1.0f, 0.1f, 0.1f, alpha};
+        case NenePolygonColor::Blue:   return SDL_FColor{0.1f, 0.4f, 1.0f, alpha};
+        case NenePolygonColor::Green:  return SDL_FColor{0.1f, 1.0f, 0.2f, alpha};
+        case NenePolygonColor::Yellow: return SDL_FColor{1.0f, 1.0f, 0.2f, alpha};
+        case NenePolygonColor::Purple: return SDL_FColor{0.7f, 0.2f, 1.0f, alpha};
+        case NenePolygonColor::Cyan:   return SDL_FColor{0.2f, 1.0f, 1.0f, alpha};
+        case NenePolygonColor::White:  return SDL_FColor{1.0f, 1.0f, 1.0f, alpha};
+        case NenePolygonColor::Black:  return SDL_FColor{0.0f, 0.0f, 0.0f, alpha};
+        default:                       return SDL_FColor{1.0f, 1.0f, 1.0f, alpha};
+    }
+}
+
 class NeneColorPolygon {
 public:
     using ColliderId = std::uint32_t;
 
 public:
     ColliderId id = 0;                    // world で採番
-    std::string owner_name;               // 任意 ("dino" 等)
+    std::string owner_name;               // たいてい管理しているノードの名前
     std::vector<SDL_FPoint> vertices;     // ローカル座標の頂点（凸を仮定）
     SDL_FPoint position{0.0f, 0.0f};      // ワールド座標の平行移動
     bool enabled = true;
-
-    // 属性：色（＝ダメージ等の属性に使うタグ）
+    // 属性：色（＝接触時にダメージがあるかなどの属性に使うタグ）
     NenePolygonColor color = NenePolygonColor::None;
-
-    // 任意：将来フィルタしたくなったら使える
+    // 将来フィルタしたくなったら使う
     std::uint32_t layer = 1;
     std::uint32_t mask  = 0xFFFFFFFFu;
+    // コライダー可視化のスイッチ
+    bool  debug_draw = false;     // true の時だけ描画
+    float debug_alpha = 0.25f;    // 塗りの透明度（0..1）
 
 public:
     // ワールド頂点を out に返す（local + position）
@@ -57,14 +71,41 @@ public:
             out.push_back(SDL_FPoint{ v.x + position.x, v.y + position.y });
         }
     }
+    void debug_render_filled(SDL_Renderer* r) const {
+        if (!r) return;
+        if (!enabled) return;
+        if (!debug_draw) return;
+        const std::size_t n = vertices.size();
+        if (n < 3) return;
+        // ワールド座標へ
+        std::vector<SDL_Vertex> vtx;
+        vtx.resize(n);
+        const SDL_FColor col = nene_to_fcolor(color, debug_alpha);
+        for (std::size_t i = 0; i < n; ++i) {
+            const float wx = vertices[i].x + position.x;
+            const float wy = vertices[i].y + position.y;
+            vtx[i].position = SDL_FPoint{ wx, wy };
+            vtx[i].color    = col;
+            vtx[i].tex_coord = SDL_FPoint{ 0.0f, 0.0f }; // texture=nullptr なので未使用
+        }
+        // 三角形ファン: (0, i, i+1)
+        std::vector<int> idx;
+        idx.reserve(static_cast<std::size_t>((n - 2) * 3));
+        for (std::size_t i = 1; i + 1 < n; ++i) {
+            idx.push_back(0);
+            idx.push_back(static_cast<int>(i));
+            idx.push_back(static_cast<int>(i + 1));
+        }
+        // ブレンド（透明描画）
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_RenderGeometry(r, nullptr, vtx.data(), static_cast<int>(vtx.size()),
+                           idx.data(), static_cast<int>(idx.size()));
+    }
 };
 
-// --------------------
-// NeneCollisionWorld (O(N) collision against a target)
-//   - stores a list of NeneColorPolygon
-//   - position update by id
-//   - detect_collision(target) returns collided polygon if any
-// --------------------
+
+// NeneCollisionWorld
+// 衝突判定サービス(SAT方式)
 class NeneCollisionWorld {
 public:
     using ColliderId = NeneColorPolygon::ColliderId;
@@ -239,25 +280,32 @@ private:
     mutable std::vector<SDL_FPoint> tmpB_const_;
 };
 
+enum class PlayMode : std::uint8_t {
+    Debug,
+    Release
+};
 
-class NeneGlobalSettings {
+// ノード間値共有サービス
+class NeneBlackboard {
 public:
-    // 必須項目
+    // --- デフォルト項目 ---
+    PlayMode play_mode;
+    // ルートノードの名前
     std::string root_name;
     // ウィンドウ（論理）設定
     int window_x = 100;
     int window_y = 100;
     int window_w = 960;
     int window_h = 540;
-    // ゲーム共通値
+    // ゲーム共通値 (ユーザーが上書きする前提だけど適当に初期値を入れとく)
     float ground_y = window_h - 120.0f;   // 地面の高さ（ピクセル）
     float gravity  = 2400.0f;             // 重力（px/s^2）
     float scroll_speed = 420.0f;          // 横スクロール速度（px/s）
-    // ---- ユーザー拡張（float）----
+    // --- ユーザー拡張（float）---
     std::unordered_map<std::string, float> user_floats;
     // API
     void setf(const std::string& key, float v) { user_floats[key] = v; }
-    // 無ければ default を返す
+    // 無い値をgetしようとするとデフォルトが返る
     float getf(const std::string& key, float default_value = 0.0f) const {
         auto it = user_floats.find(key);
         return (it == user_floats.end()) ? default_value : it->second;
@@ -273,11 +321,9 @@ public:
 };
 
 
-// --------------------
+
 // PathService
-//  - SDL_GetBasePath() の結果を1回だけ取得して保持
-//  - SDL_GetBasePath() が返すバッファは SDL_free() で解放する（リーク防止）
-// --------------------
+// パス解決サービス
 class PathService {
 public:
     explicit PathService(std::string assets_dir = "assets/")
@@ -336,6 +382,7 @@ public:
 
 
 // NeneMailServer
+// ノード間通信(内部イベント伝播)サービス
 class NeneMailServer {
 public:
     void push(const NeneMail& mail) { mail_queue_.push_back(mail); }
