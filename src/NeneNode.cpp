@@ -308,3 +308,49 @@ void NeneRoot::handle_nene_mail(const NeneMail& mail) {
         show_tree();
     }
 }
+
+// ねねファクトリ
+static std::vector<std::string> split_n(const std::string& s, char delim, int max_parts = -1) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char ch : s) {
+        if (ch == delim && (max_parts < 0 || (int)out.size() + 1 < max_parts)) {
+            out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(ch);
+        }
+    }
+    out.push_back(cur);
+    return out;
+}
+
+void NeneFactory::handle_nene_mail(const NeneMail& mail) {
+    if (mail.to != this->name) return;
+    // spawn: body = "type|name|arg" （name/arg は省略可）
+    if (mail.subject == "spawn") {
+        if (mail.body.empty()) return;
+        auto parts = split_n(mail.body, '|', 3);
+        const std::string type = (parts.size() >= 1) ? parts[0] : "";
+        std::string name       = (parts.size() >= 2) ? parts[1] : "";
+        const std::string arg  = (parts.size() >= 3) ? parts[2] : "";
+        if (type.empty()) return;
+        auto it = factories_.find(type);
+        if (it == factories_.end()) nnthrow("NeneFactory: unknown type: " + type);
+        // name が無い場合は自動命名
+        if (name.empty()) {
+            int& n = seq_[type];
+            name = type + "_" + std::to_string(n++);
+        }
+        auto node = (it->second)(name, arg);
+        if (!node) nnthrow("NeneFactory: factory returned null: " + type);
+        add_child(std::move(node));
+        return;
+    }
+    // despawn: body = "child_name"
+    if (mail.subject == "despawn") {
+        if (mail.body.empty()) return;
+        remove_child(mail.body);
+        return;
+    }
+}

@@ -285,11 +285,14 @@ enum class PlayMode : std::uint8_t {
     Release
 };
 
-// ノード間値共有サービス
+// ノード間データ共有サービス
 class NeneBlackboard {
 public:
     // --- デフォルト項目 ---
+    // プレイモード(デバック/本番)
     PlayMode play_mode;
+    // FPS
+    int fps = 60;
     // ルートノードの名前
     std::string root_name;
     // ウィンドウ（論理）設定

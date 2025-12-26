@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <random>
 #include <cmath>
+#include <vector>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneNode.hpp>
 
@@ -224,6 +225,14 @@ public:
     };
     Cactus(std::string name, Variant v)
         : NeneNode(std::move(name)), variant_(v) {}
+    // ノードが消えるときにコライダーも消す
+    ~Cactus() override {
+        if (collision_world && collider_id_ != 0) {
+            collision_world->remove_collider(collider_id_);
+            collider_id_ = 0;
+        }
+    }
+
 protected:
     void init_node() override {
         if (!asset_loader || !path_service || !blackboard) nnthrow("services not ready (asset_loader/path_service/blackboard)");
@@ -265,7 +274,7 @@ protected:
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
         }
         if (x_ + w_ < -despawn_margin_) {
-            send_mail(NeneMail("world", this->name, "despawn", this->name));
+            send_mail(NeneMail("cactus_factory", this->name, "despawn", this->name));
         }
     }
     void render(SDL_Renderer* r) override {
@@ -295,7 +304,73 @@ private:
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 };
 
+// サボテン工場
+class CactusFactory final : public NeneFactory {
+public:
+    explicit CactusFactory(std::string name)
+        : NeneFactory(std::move(name)) {}
+protected:
+    void init_node() override {
+        const float small_base_x = 446.0f;
+        const float small_base_y = 0.0f;
+        const float small_w = 34.0f;
+        const float small_h = 70.0f;
+        cactus_variants_ = {
+            // 小
+            { SDL_FRect{ small_base_x+small_w*0, small_base_y, small_w, small_h }, small_w, small_h },
+            { SDL_FRect{ small_base_x+small_w*1, small_base_y, small_w, small_h }, small_w, small_h },
+            { SDL_FRect{ small_base_x+small_w*2, small_base_y, small_w, small_h }, small_w, small_h },
+            { SDL_FRect{ small_base_x+small_w*3, small_base_y, small_w, small_h }, small_w, small_h },
+            { SDL_FRect{ small_base_x+small_w*4, small_base_y, small_w, small_h }, small_w, small_h },
+            { SDL_FRect{ small_base_x+small_w*5, small_base_y, small_w, small_h }, small_w, small_h },
+        };
+        // NeneFactory に型登録：spawnメールで cactus を生成する
+        // body例: "cactus|cactus_12|"
+        register_type("cactus",
+            [this](std::string instance_name, std::string_view /*arg*/) -> std::unique_ptr<NeneNode> {
+                if (cactus_variants_.empty()) nnthrow("cactus_variants_ is empty");
 
+                std::uniform_int_distribution<int> dist(0, (int)cactus_variants_.size() - 1);
+                const auto v = cactus_variants_[dist(rng_)];
+                return std::make_unique<Cactus>(std::move(instance_name), v); // Cactus(name, Variant) :contentReference[oaicite:4]{index=4}
+            }
+        );
+        spawn_accum_ = 0.0f;
+        obstacle_seq_ = 0;
+        // 最初の出現までの時間（0.8〜1.6秒）
+        next_spawn_in_ = frand_(0.8f, 1.6f);
+    }
+    void handle_time_lapse(const float& dt) override {
+        spawn_accum_ += dt;
+        if (spawn_accum_ >= next_spawn_in_) {
+            spawn_accum_ = 0.0f;
+            spawn_obstacle_();
+            // 次の間隔をランダムに（0.7〜1.7秒）
+            next_spawn_in_ = frand_(0.7f, 1.7f);
+        }
+    }
+    void handle_nene_mail(const NeneMail& mail) override {
+        // 障害物を消去
+        if (mail.subject == "despawn") remove_child(mail.body);
+    }
+private:
+    std::vector<Cactus::Variant> cactus_variants_;
+    void spawn_obstacle_() {
+        std::uniform_int_distribution<int> dist(0, static_cast<int>(cactus_variants_.size()) - 1);
+        const auto v = cactus_variants_[dist(rng_)];
+        const std::string name = "cactus_" + std::to_string(obstacle_seq_++);
+        add_child(std::make_unique<Cactus>(name, v));
+    }
+    static float frand_(float a, float b) {
+        const float t = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
+        return a + (b - a) * t;
+    }
+    std::mt19937 rng_{ std::random_device{}() };
+    float spawn_accum_ = 0.0f;
+    float spawn_interval_ = 1.35f;
+    int obstacle_seq_ = 0;
+    float next_spawn_in_ = 1.0f;
+};
 
 // 審判（CollisionWorldを監視し続ける）
 class Referee final : public NeneNode {
@@ -364,81 +439,26 @@ protected:
         add_child(std::make_unique<Ground>("ground"));
         add_child(std::make_unique<Dino>("dino"));
         add_child(std::make_unique<Referee>("referee"));
-        spawn_accum_ = 0.0f;
-        obstacle_seq_ = 0;
-        // 最初の出現までの時間（0.8〜1.6秒）
-        next_spawn_in_ = frand_(0.8f, 1.6f);
+        add_child(std::make_unique<CactusFactory>("cactus_factory"));
     }
     void handle_time_lapse(const float& dt) override {
         if (blackboard) {
             float& score = blackboard->ensuref("score", 0.0f);
             score += dt * 100.0f; // 毎秒100点
         }
-        spawn_accum_ += dt;
-        if (spawn_accum_ >= next_spawn_in_) {
-            spawn_accum_ = 0.0f;
-            spawn_obstacle_();
-            // 次の間隔をランダムに（0.7〜1.7秒）
-            next_spawn_in_ = frand_(0.7f, 1.7f);
-        }
     }
     void handle_nene_mail(const NeneMail& mail) override {
-        // 障害物を消去
-        if (mail.subject == "despawn") remove_child(mail.body);
         // Referee のブロードキャストを受けた時
         if (mail.subject == "collision_detected") {
             // World 以下の time_lapse, sdl_event パルスを遮断
             this->valve_time_lapse = false;
             this->valve_sdl_event = false;
-            // 障害物の生成を停止
-            spawn_accum_ = 0.0f;
             // ゲームオーバーに移行
             if (blackboard) blackboard->setf("game_over", 1.0f);
             return;
         }
     }
 private:
-    void spawn_obstacle_() {
-        std::uniform_int_distribution<int> dist(0, static_cast<int>(cactus_variants_.size()) - 1);
-        const auto v = cactus_variants_[dist(rng_)];
-        const std::string name = "cactus_" + std::to_string(obstacle_seq_++);
-        add_child(std::make_unique<Cactus>(name, v));
-    }
-    static float frand_(float a, float b) {
-        const float t = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
-        return a + (b - a) * t;
-    }
-    std::mt19937 rng_{ std::random_device{}() };
-    // サボテンの種類
-    float small_base_x = 446.0f;
-    float small_base_y = 0.0f;
-    float small_w = 34.0f;
-    float small_h = 70.0f;
-    float big_base_x = 650.0f;
-    float big_base_y = 0.0f;
-    float big_w = 50.5f;
-    float big_h = 96.0f;
-    std::vector<Cactus::Variant> cactus_variants_ = {
-        // 小
-        { SDL_FRect{ small_base_x+small_w*0, small_base_y, small_w, small_h }, small_w, small_h },
-        { SDL_FRect{ small_base_x+small_w*1, small_base_y, small_w, small_h }, small_w, small_h },
-        { SDL_FRect{ small_base_x+small_w*2, small_base_y, small_w, small_h }, small_w, small_h },
-        { SDL_FRect{ small_base_x+small_w*3, small_base_y, small_w, small_h }, small_w, small_h },
-        { SDL_FRect{ small_base_x+small_w*4, small_base_y, small_w, small_h }, small_w, small_h },
-        { SDL_FRect{ small_base_x+small_w*5, small_base_y, small_w, small_h }, small_w, small_h },
-        // 大
-        // { SDL_FRect{ big_base_x+big_w*0, big_base_y, big_w, big_h }, big_w, big_h },
-        // { SDL_FRect{ big_base_x+big_w*1, big_base_y, big_w, big_h }, big_w, big_h },
-        // { SDL_FRect{ big_base_x+big_w*2, big_base_y, big_w, big_h }, big_w, big_h },
-        // { SDL_FRect{ big_base_x+big_w*3, big_base_y, big_w, big_h }, big_w, big_h },
-        // 3つ組
-        // { SDL_FRect{ big_base_x+big_w*4, big_base_y, 100, big_h }, 100, big_h },
-
-    };
-    float spawn_accum_ = 0.0f;
-    float spawn_interval_ = 1.35f;
-    int obstacle_seq_ = 0;
-    float next_spawn_in_ = 1.0f;
 };
 
 

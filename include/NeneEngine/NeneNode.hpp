@@ -156,3 +156,20 @@ private:
     std::string current_node_;
     std::string mail_subject_ = "switch_to";
 };
+
+// ねねファクトリ (子ノードを生成/破棄するノード. 敵の生成などで使う)
+class NeneFactory : public NeneNode {
+public:
+    // type, instance_name, arg を受け取ってノードを作る
+    using Factory = std::function<std::unique_ptr<NeneNode>(std::string instance_name, std::string_view arg)>;
+    explicit NeneFactory(std::string name) : NeneNode(std::move(name)) {}
+    void register_type(std::string type, Factory factory) {
+        if (!factory) nnthrow("register_type: factory is null");
+        factories_.emplace(std::move(type), std::move(factory));
+    }
+protected:
+    void handle_nene_mail(const NeneMail& mail) override;
+private:
+    std::unordered_map<std::string, Factory> factories_;
+    std::unordered_map<std::string, int> seq_; // 自動命名用
+};
