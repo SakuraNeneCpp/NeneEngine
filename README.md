@@ -4,6 +4,17 @@
 ## ねねエンジンの仕組み
 ![仕組み](figs/img1.png "仕組み")
 
+###  ファイル構成
+- NeneNode.cpp(.hpp)  
+    基幹システム. NeneServerをinclude(唯一の依存関係)
+- Neneserver.cpp(.hpp)  
+    共有的に使うサービス. 親から子へ注入される
+- NeneComponents.hpp  
+    専有的に使うクラスや構造体. 状態を持つものだけ
+- NeneUtilities.hpp  
+    便利な関数. 計算だけする
+
+
 ### 木構造+パルス伝播+共有サービス注入
 
 ### ノード間通信: 黒板とメール
@@ -12,7 +23,7 @@
 - NeneRoot
 - NeneSwitch
 
-### 各種サービス(随時追加)
+### 共有サービス(随時追加)
 - NeneImageLoader
 - NeneFontLoader
 - NeneCollisionWorld
@@ -36,5 +47,7 @@
 - インプットマネージャ (入力をNeneMailに翻訳してブロードキャストする)
 ### サーバ
 - セーブサービス `NeneSave`
-### その他
-- アニメーション実装を簡単にしたい
+### コンポーネント
+- アニメーション制御装置 `NeneAnimator`
+- 時間管理装置 `NeneTimer`
+- 

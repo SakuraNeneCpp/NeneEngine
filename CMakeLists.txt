@@ -61,6 +61,8 @@ _pick_target(SDL3_TTF_LIB
 add_library(NeneEngineLib STATIC
   src/NeneNode.cpp
   src/NeneServer.cpp
+  src/NeneComponents.cpp
+  src/NeneUtilities.cpp
 )
 
 target_include_directories(NeneEngineLib
