@@ -1,8 +1,8 @@
-<!-- ![ロゴ](figs/logo.png "ロゴ") -->
+![ロゴ](note/logo.png "ロゴ")
 # NeneEngine
 ねねエンジンへようこそ! ねねエンジンはC++でゲームを作るためのライブラリです.
 ## ねねエンジンの仕組み
-![仕組み](figs/img1.png "仕組み")
+![仕組み](note/img1.png "仕組み")
 
 ###  ファイル構成
 - NeneNode.cpp(.hpp)  
