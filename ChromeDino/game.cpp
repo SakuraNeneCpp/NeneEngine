@@ -170,7 +170,6 @@ protected:
         if (!SDL_GetTextureSize(sprite_tex_, &tw, &th)) {
             nnthrow("SDL_GetTextureSize failed");
         }
-        // ここだけ数値調整ポイント（見え方が違ったら kSrcH を変える）
         constexpr float kSrcH = 28.0f;
         src_ = SDL_FRect{ 0.0f, th - kSrcH, tw, kSrcH };
         scroll_ = 0.0f;
@@ -195,7 +194,6 @@ protected:
         const float src_y = src_.y;
         const float src_h = src_.h;
         const float src_w = src_.w;
-        // 画面幅ぶんを「srcのどこから切り出すか」で2回描画（隙間なし）
         const float w1 = (src_x + ww <= src_w) ? ww : (src_w - src_x);
         // 1枚目
         SDL_FRect s1{ src_x, src_y, w1, src_h };
@@ -325,7 +323,6 @@ protected:
             { SDL_FRect{ small_base_x+small_w*5, small_base_y, small_w, small_h }, small_w, small_h },
         };
         // NeneFactory に型登録：spawnメールで cactus を生成する
-        // body例: "cactus|cactus_12|"
         register_type("cactus",
             [this](std::string instance_name, std::string_view /*arg*/) -> std::unique_ptr<NeneNode> {
                 if (cactus_variants_.empty()) nnthrow("cactus_variants_ is empty");
@@ -659,7 +656,7 @@ protected:
     void handle_time_lapse(const float& dt) override
     {
         blink_accum_ += dt;
-        if (blink_accum_ >= 0.5f) {        // 0.5秒ごとにON/OFF
+        if (blink_accum_ >= 0.5f) { // 0.5秒ごとにON/OFF
             blink_accum_ = 0.0f;
             press_visible_ = !press_visible_;
         }

@@ -28,7 +28,7 @@ public:
         std::function<void(Context&)> on_exit;
         // 遷移したいときは next を返す（返さなければ同じ状態を継続）
         std::function<Transition(Context&, float)> on_update;
-        // 任意：イベントで遷移したいとき
+        // イベントで遷移したいとき
         std::function<Transition(Context&, const Event&)> on_event;
     };
 public:

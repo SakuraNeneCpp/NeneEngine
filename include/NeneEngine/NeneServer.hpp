@@ -332,7 +332,7 @@ public:
     explicit PathService(std::string assets_dir = "assets/")
         : assets_dir_(std::move(assets_dir)) {
         // SDL3: SDL_GetBasePath() は const char* を返し、SDL が内部でキャッシュする
-        // 戻り値は SDL_free() しない :contentReference[oaicite:1]{index=1}
+        // 戻り値は SDL_free() しない
         const char* base = SDL_GetBasePath();
         base_path_ = base ? base : "";
 
