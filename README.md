@@ -2,7 +2,7 @@
 # NeneEngine
 ねねエンジンへようこそ! ねねエンジンはC++でゲームを作るためのライブラリです!
 
-デモ: `.\build\Debug\ChromeDino.exe`
+デモ: `.\build\Debug\SuperChromeDino.exe`
 
 **ねねエンジンのここがすごい!**
 - CUIなのでAI-friendly!

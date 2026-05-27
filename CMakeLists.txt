@@ -89,21 +89,21 @@ target_link_libraries(NeneEngineLib
 )
 
 # ----------------------------
-# ChromeDino executable
+# SuperChromeDino executable
 # ----------------------------
-add_executable(ChromeDino
-  ChromeDino/main.cpp
-  ChromeDino/game.cpp
+add_executable(SuperChromeDino
+  SuperChromeDino/main.cpp
+  SuperChromeDino/game.cpp
 )
 
-add_custom_command(TARGET ChromeDino POST_BUILD
+add_custom_command(TARGET SuperChromeDino POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-          ${CMAKE_SOURCE_DIR}/ChromeDino/assets
-          $<TARGET_FILE_DIR:ChromeDino>/assets
+          ${CMAKE_SOURCE_DIR}/SuperChromeDino/assets
+          $<TARGET_FILE_DIR:SuperChromeDino>/assets
 )
 
 
-target_link_libraries(ChromeDino
+target_link_libraries(SuperChromeDino
   PRIVATE
     NeneEngineLib
     ${SDL3MAIN_LIB}

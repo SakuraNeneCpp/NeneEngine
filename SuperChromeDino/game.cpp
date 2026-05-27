@@ -31,7 +31,7 @@ protected:
         w_ = 88.0f;
         h_ = 96.0f;
         // 初期位置
-        x_ = 120.0f;
+        x_ = (static_cast<float>(blackboard->window_w) - w_) * 0.5f;
         y_ = blackboard->ground_y - h_;
         // 走りアニメ
         run_src_[0] = SDL_FRect{ 1514.2f, 0.0f, 88.0f, 96.0f };
@@ -40,8 +40,10 @@ protected:
         // 状態
         on_ground_ = true;
         vy_ = 0.0f;
+        vx_ = 0.0f;
         anim_accum_ = 0.0f;
         anim_idx_ = 0;
+        facing_dir_ = 1;
         dead_ = false;
         // CollisionWorld登録（恐竜の凸近似）
         NeneColorPolygon poly;
@@ -79,13 +81,20 @@ protected:
     void handle_time_lapse(const float& dt) override {
         if (!blackboard) return;
         if (dead_) return;
-        // 地上にいれば走るアニメーションを再生し続ける
-        if (on_ground_) {
+        vx_ = blackboard->getf("world_scroll_speed", 0.0f);
+        const bool moving = (std::fabs(vx_) > 0.001f);
+        if (moving) facing_dir_ = (vx_ > 0.0f) ? 1 : -1;
+        x_ = (static_cast<float>(blackboard->window_w) - w_) * 0.5f;
+        // 地上で移動入力があるときだけ足踏みアニメーションを再生する
+        if (on_ground_ && moving) {
             anim_accum_ += dt;
             if (anim_accum_ >= run_frame_sec_) {
                 anim_accum_ = 0.0f;
                 anim_idx_ = (anim_idx_ + 1) % 2;
             }
+        } else if (on_ground_) {
+            anim_accum_ = 0.0f;
+            anim_idx_ = 0;
         }
         // ジャンプ中なら物理演算に従って座標を更新し続ける
         vy_ += blackboard->gravity * dt;
@@ -109,7 +118,11 @@ protected:
         if (!sprite_tex_) return;
         const SDL_FRect* src = (!on_ground_) ? &jump_src_ : &run_src_[anim_idx_];
         SDL_FRect dst { x_, y_, w_, h_ };
-        SDL_RenderTexture(r, sprite_tex_, src, &dst);
+        if (facing_dir_ < 0) {
+            SDL_RenderTextureRotated(r, sprite_tex_, src, &dst, 0.0, nullptr, SDL_FLIP_HORIZONTAL);
+        } else {
+            SDL_RenderTexture(r, sprite_tex_, src, &dst);
+        }
         // コライダー可視化
         if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
             if (collision_world && collider_id_ != 0) {
@@ -139,9 +152,11 @@ private:
     float w_ = 0.0f;
     float h_ = 0.0f;
     // 状態
+    float vx_ = 0.0f;
     float vy_ = 0.0f;
     bool  on_ground_ = true;
     bool  dead_ = false;
+    int   facing_dir_ = 1;
     // アニメーション設定
     float anim_accum_ = 0.0f;
     int   anim_idx_ = 0;
@@ -175,7 +190,7 @@ protected:
     }
     void handle_time_lapse(const float& dt) override {
         if (!blackboard) return;
-        const float speed = blackboard->scroll_speed;
+        const float speed = blackboard->getf("world_scroll_speed", 0.0f);
         scroll_ += speed * dt;
         // wrap（src_.w が 0 になることは無い想定）
         if (src_.w > 1.0f) {
@@ -260,15 +275,16 @@ protected:
         poly.debug_alpha = 0.25f;
         // コライダー登録
         collider_id_ = collision_world->add_collider(std::move(poly));
-        speed_ = blackboard->scroll_speed;
     }
     void handle_time_lapse(const float& dt) override {
         if (!blackboard) return;
-        x_ -= speed_ * dt;
+        const float speed = blackboard->getf("world_scroll_speed", 0.0f);
+        x_ -= speed * dt;
         if (collision_world && collider_id_ != 0) {
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
         }
-        if (x_ + w_ < -despawn_margin_) {
+        if (x_ + w_ < -despawn_margin_
+            || x_ > static_cast<float>(blackboard->window_w) + spawn_margin_ + despawn_margin_) {
             send_mail(NeneMail("cactus_factory", this->name, "despawn", this->name));
         }
     }
@@ -293,7 +309,6 @@ private:
     SDL_Texture* sprite_tex_ = nullptr;
     SDL_FRect src_{};
     float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
-    float speed_ = 0.0f;
     float spawn_margin_ = 40.0f;
     float despawn_margin_ = 60.0f;
     NeneCollisionWorld::ColliderId collider_id_ = 0;
@@ -335,6 +350,11 @@ protected:
         next_spawn_in_ = frand_(0.8f, 1.6f);
     }
     void handle_time_lapse(const float& dt) override {
+        const float speed = blackboard ? blackboard->getf("world_scroll_speed", 0.0f) : 0.0f;
+        if (speed <= 1.0f) {
+            spawn_accum_ = 0.0f;
+            return;
+        }
         spawn_accum_ += dt;
         if (spawn_accum_ >= next_spawn_in_) {
             spawn_accum_ = 0.0f;
@@ -437,8 +457,15 @@ protected:
     }
     void handle_time_lapse(const float& dt) override {
         if (blackboard) {
+            const bool move_left = input_server && input_server->is_down("move_left");
+            const bool move_right = input_server && input_server->is_down("move_right");
+            const bool dash = input_server && input_server->is_down("dash");
+            const int move_dir = (move_right ? 1 : 0) - (move_left ? 1 : 0);
+            const float dash_mul = dash ? 1.8f : 1.0f;
+            const float speed = static_cast<float>(move_dir) * blackboard->scroll_speed * dash_mul;
+            blackboard->setf("world_scroll_speed", speed);
             float& score = blackboard->ensuref("score", 0.0f);
-            score += dt * 100.0f; // 毎秒100点
+            if (speed > 0.0f) score += dt * 100.0f; // 右へ進んだ時間を得点化
         }
     }
     void handle_nene_mail(const NeneMail& mail) override {
@@ -576,9 +603,14 @@ protected:
         if (blackboard) {
             blackboard->setf("score", 0.0f);
             blackboard->setf("game_over", 0.0f);
+            blackboard->setf("world_scroll_speed", 0.0f);
             // コライダー可視化
             blackboard->setf("show_hitbox", 1.0f);
             blackboard->clear_input_map("play");
+            blackboard->bind_key("play", SDLK_RIGHT, "move_right");
+            blackboard->bind_key("play", SDLK_LEFT, "move_left");
+            blackboard->bind_key("play", SDLK_LSHIFT, "dash");
+            blackboard->bind_key("play", SDLK_RSHIFT, "dash");
             blackboard->bind_key("play", SDLK_SPACE, "jump");
             blackboard->bind_key("play", SDLK_UP, "jump");
         }
@@ -603,7 +635,7 @@ protected:
         // フォント
         font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         // タイトル文字
-        title_tex_ = font_loader->get_text_texture(font_path_, 56, "ChromeDino", SDL_Color{255, 255, 255, 255});
+        title_tex_ = font_loader->get_text_texture(font_path_, 56, "SuperChromeDino", SDL_Color{255, 255, 255, 255});
         // 「Press...」文字
         press_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Start", SDL_Color{255, 255, 255, 255});
     }
@@ -694,7 +726,7 @@ public:
     Game()
     : NeneRoot(
         "game",
-        "ChromeDino",
+        "SuperChromeDino",
         960, 540,
         SDL_WINDOW_RESIZABLE,
         100, 100,

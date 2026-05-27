@@ -2,7 +2,7 @@
 ```bash
 $dest = ".\for_ai"
 New-Item -ItemType Directory -Force $dest | Out-Null
-Get-ChildItem -File -Recurse -Path ".\include\NeneEngine", ".\src", ".\ChromeDino" -Include *.cpp,*.hpp | ForEach-Object {Copy-Item -Force $_.FullName (Join-Path $dest ($_.Name + ".txt"))}
+Get-ChildItem -File -Recurse -Path ".\include\NeneEngine", ".\src", ".\SuperChromeDino" -Include *.cpp,*.hpp | ForEach-Object {Copy-Item -Force $_.FullName (Join-Path $dest ($_.Name + ".txt"))}
 ``` -->
 
 
@@ -20,5 +20,5 @@ cmake ..  -G "Visual Studio 17 2022"  -A x64  -DCMAKE_TOOLCHAIN_FILE=C:/Users/**
 cmake --build . --config Debug
 
 # 実行
-./Debug/ChromeDino.exe
+./Debug/SuperChromeDino.exe
 ```
