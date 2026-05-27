@@ -6,6 +6,7 @@
 #include <string_view>
 #include <map>
 #include <unordered_map>
+#include <utility>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneServer.hpp>
 
@@ -16,11 +17,13 @@ public:
     explicit NeneNode(std::string);
     virtual ~NeneNode() = default;
     void set_valve_sdl_event(bool v)   { valve_sdl_event = v; }
+    void set_valve_nene_input(bool v)  { valve_nene_input = v; }
     void set_valve_time_lapse(bool v)  { valve_time_lapse = v; }
     void set_valve_nene_mail(bool v)   { valve_nene_mail = v; }
     void set_valve_render(bool v)      { valve_render = v; }
     void set_active(bool v) {
         set_valve_sdl_event(v);
+        set_valve_nene_input(v);
         set_valve_time_lapse(v);
         set_valve_nene_mail(v);
         set_valve_render(v);
@@ -36,11 +39,13 @@ protected:
     void show_tree(std::ostream& os = std::cout) const;
     // イベントパルス
     void pulse_sdl_event(const SDL_Event&);   // →.cpp
+    void pulse_nene_input(const NeneInput&);  // →.cpp
     void pulse_time_lapse(const float&);      // →.cpp
     void pulse_nene_mail(const NeneMail&);    // →.cpp
     void pulse_render(SDL_Renderer*);         // →.cpp
     // 水門(パルスを遮断する)
     bool valve_sdl_event = true;
+    bool valve_nene_input = true;
     bool valve_time_lapse = true;
     bool valve_nene_mail = true;
     bool valve_render = true;
@@ -48,6 +53,7 @@ protected:
     int render_z = 0;
     // ねねサーバ共有
     std::shared_ptr<NeneMailServer> mail_server;
+    std::shared_ptr<NeneInputServer> input_server;
     std::shared_ptr<NeneImageLoader> asset_loader;
     std::shared_ptr<NeneFontLoader> font_loader;
     std::shared_ptr<PathService> path_service;
@@ -61,6 +67,7 @@ protected:
     virtual void init_node() {}
     // イベントパルスの前方フック
     virtual void handle_sdl_event(const SDL_Event&) {}
+    virtual void handle_nene_input(const NeneInput&) {}
     virtual void handle_time_lapse(const float&) {}
     virtual void handle_nene_mail(const NeneMail&) {}
     virtual void render(SDL_Renderer*) {}
@@ -79,6 +86,13 @@ protected:
     }
     void send_mail(NeneMail&& mail) {
         if (mail_server) mail_server->push(std::move(mail));
+    }
+    // ノードから入力送信
+    void send_input(const NeneInput& input) {
+        if (input_server) input_server->push(input);
+    }
+    void send_input(NeneInput&& input) {
+        if (input_server) input_server->push(std::move(input));
     }
     // ターミナル出力
     void nnlog(std::string_view msg) const; // →.cpp
@@ -104,6 +118,21 @@ private:
     virtual void handle_sdl_event(const SDL_Event&) override;
     virtual void handle_nene_mail(const NeneMail& mail) override;
     bool tree_built = false;
+};
+
+// ねね入力通訳
+class NeneInputInterpreter : public NeneNode {
+public:
+    explicit NeneInputInterpreter(std::string name, std::string map_name)
+        : NeneNode(std::move(name)), map_name_(std::move(map_name)) {}
+    void set_input_map(std::string_view map_name) {
+        map_name_ = std::string(map_name);
+    }
+    const std::string& input_map() const { return map_name_; }
+protected:
+    void handle_sdl_event(const SDL_Event& ev) override;
+private:
+    std::string map_name_;
 };
 
 // ねねスイッチ

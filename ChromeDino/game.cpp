@@ -68,14 +68,11 @@ protected:
         // コライダー登録
         collider_id_ = collision_world->add_collider(std::move(poly));
     }
-    // 外部イベント
-    void handle_sdl_event(const SDL_Event& ev) override {
+    // 内部入力
+    void handle_nene_input(const NeneInput& input) override {
         if (dead_) return;
-        // スペースキーでジャンプ
-        if (ev.type == SDL_EVENT_KEY_DOWN) {
-            if (ev.key.key == SDLK_SPACE || ev.key.key == SDLK_UP) {
-                try_jump_();
-            }
+        if (input.action == "jump" && input.phase == NeneInputPhase::Pressed) {
+            try_jump_();
         }
     }
     // タイムラプス
@@ -581,9 +578,13 @@ protected:
             blackboard->setf("game_over", 0.0f);
             // コライダー可視化
             blackboard->setf("show_hitbox", 1.0f);
+            blackboard->clear_input_map("play");
+            blackboard->bind_key("play", SDLK_SPACE, "jump");
+            blackboard->bind_key("play", SDLK_UP, "jump");
         }
         if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
         else nnerr("no collision world");
+        add_child(std::make_unique<NeneInputInterpreter>("input", "play"));
         add_child(std::make_unique<World>("world"));
         add_child(std::make_unique<Overlay>("overlay"));
     }

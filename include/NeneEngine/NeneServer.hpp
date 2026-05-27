@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <functional>
+#include <utility>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -285,6 +286,162 @@ enum class PlayMode : std::uint8_t {
     Release
 };
 
+// NeneInput
+enum class NeneInputPhase : std::uint8_t {
+    Pressed,
+    Released,
+    Repeated,
+    Changed
+};
+
+enum class NeneInputDevice : std::uint8_t {
+    Unknown,
+    Keyboard,
+    Mouse,
+    Gamepad
+};
+
+enum class NeneInputControl : std::uint8_t {
+    Button,
+    Axis
+};
+
+class NeneInput {
+public:
+    // 送り主: 通訳ノード名など
+    std::string from;
+    // 意味論的な入力名: "jump", "decide", "left" など
+    std::string action;
+    NeneInputPhase phase = NeneInputPhase::Pressed;
+    NeneInputDevice device = NeneInputDevice::Unknown;
+    float value = 1.0f;
+    int player = 0;
+
+    NeneInput() = default;
+
+    NeneInput(std::string from_, std::string action_, NeneInputPhase phase_,
+              NeneInputDevice device_ = NeneInputDevice::Unknown,
+              float value_ = 1.0f, int player_ = 0)
+        : from(std::move(from_)), action(std::move(action_)),
+          phase(phase_), device(device_), value(value_), player(player_) {}
+};
+
+class NeneInputBinding {
+public:
+    NeneInputDevice device = NeneInputDevice::Keyboard;
+    NeneInputControl control = NeneInputControl::Button;
+    int code = 0;
+    std::string action;
+    // Buttonでは押下時の値、Axisでは方向を表す符号付き倍率として使う
+    float scale = 1.0f;
+    int player = 0;
+    float dead_zone = 0.35f;
+
+    NeneInputBinding() = default;
+
+    NeneInputBinding(NeneInputDevice device_, NeneInputControl control_,
+                     int code_, std::string action_, float scale_ = 1.0f,
+                     int player_ = 0, float dead_zone_ = 0.35f)
+        : device(device_), control(control_), code(code_),
+          action(std::move(action_)), scale(scale_),
+          player(player_), dead_zone(dead_zone_) {}
+};
+
+// NeneInputServer
+// 意味論的な入力イベントのキューと、現在フレームの入力状態を持つ
+class NeneInputServer {
+public:
+    void begin_frame() {
+        pressed_.clear();
+        released_.clear();
+        changed_.clear();
+    }
+
+    void push(const NeneInput& input) { input_queue_.push_back(input); }
+    void push(NeneInput&& input) { input_queue_.push_back(std::move(input)); }
+
+    bool pull(NeneInput& out) {
+        if (input_queue_.empty()) return false;
+        out = std::move(input_queue_.front());
+        input_queue_.pop_front();
+        apply_state_(out);
+        return true;
+    }
+
+    bool empty() const { return input_queue_.empty(); }
+    std::size_t size() const { return input_queue_.size(); }
+
+    bool is_down(std::string_view action, int player = 0) const {
+        const auto it = states_.find(key_(action, player));
+        return it != states_.end() && it->second.down;
+    }
+
+    bool was_pressed(std::string_view action, int player = 0) const {
+        return pressed_.find(key_(action, player)) != pressed_.end();
+    }
+
+    bool was_released(std::string_view action, int player = 0) const {
+        return released_.find(key_(action, player)) != released_.end();
+    }
+
+    bool was_changed(std::string_view action, int player = 0) const {
+        return changed_.find(key_(action, player)) != changed_.end();
+    }
+
+    float value(std::string_view action, int player = 0) const {
+        const auto it = states_.find(key_(action, player));
+        return (it == states_.end()) ? 0.0f : it->second.value;
+    }
+
+private:
+    class State {
+    public:
+        bool down = false;
+        float value = 0.0f;
+    };
+
+    static std::string key_(std::string_view action, int player) {
+        return std::to_string(player) + ":" + std::string(action);
+    }
+
+    void apply_state_(const NeneInput& input) {
+        if (input.action.empty()) return;
+        const std::string key = key_(input.action, input.player);
+        auto& state = states_[key];
+
+        switch (input.phase) {
+            case NeneInputPhase::Pressed:
+                state.down = true;
+                state.value = input.value;
+                pressed_[key] = true;
+                changed_[key] = true;
+                break;
+            case NeneInputPhase::Released:
+                state.down = false;
+                state.value = 0.0f;
+                released_[key] = true;
+                changed_[key] = true;
+                break;
+            case NeneInputPhase::Repeated:
+                state.down = true;
+                state.value = input.value;
+                break;
+            case NeneInputPhase::Changed:
+                state.value = input.value;
+                state.down = (std::fabs(input.value) > 0.0001f);
+                changed_[key] = true;
+                break;
+        }
+    }
+
+private:
+    std::deque<NeneInput> input_queue_;
+    std::unordered_map<std::string, State> states_;
+    std::unordered_map<std::string, bool> pressed_;
+    std::unordered_map<std::string, bool> released_;
+    std::unordered_map<std::string, bool> changed_;
+};
+
 // ノード間データ共有サービス
 class NeneBlackboard {
 public:
@@ -304,6 +461,33 @@ public:
     float ground_y = window_h - 120.0f;   // 地面の高さ（ピクセル）
     float gravity  = 2400.0f;             // 重力（px/s^2）
     float scroll_speed = 420.0f;          // 横スクロール速度（px/s）
+    // キーコンフィグ
+    std::unordered_map<std::string, std::vector<NeneInputBinding>> input_maps;
+    void bind_input(std::string map_name, NeneInputBinding binding) {
+        input_maps[std::move(map_name)].push_back(std::move(binding));
+    }
+    void bind_key(std::string map_name, SDL_Keycode key, std::string action, int player = 0) {
+        bind_input(std::move(map_name),
+                   NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                    static_cast<int>(key), std::move(action), 1.0f, player));
+    }
+    void bind_gamepad_button(std::string map_name, SDL_GamepadButton button,
+                             std::string action, int player = 0) {
+        bind_input(std::move(map_name),
+                   NeneInputBinding(NeneInputDevice::Gamepad, NeneInputControl::Button,
+                                    static_cast<int>(button), std::move(action), 1.0f, player));
+    }
+    void bind_gamepad_axis(std::string map_name, SDL_GamepadAxis axis,
+                           std::string action, float scale = 1.0f,
+                           int player = 0, float dead_zone = 0.35f) {
+        bind_input(std::move(map_name),
+                   NeneInputBinding(NeneInputDevice::Gamepad, NeneInputControl::Axis,
+                                    static_cast<int>(axis), std::move(action),
+                                    scale, player, dead_zone));
+    }
+    void clear_input_map(const std::string& map_name) {
+        input_maps.erase(map_name);
+    }
     // --- ユーザー拡張（float）---
     std::unordered_map<std::string, float> user_floats;
     // API
@@ -317,6 +501,7 @@ public:
         return user_floats.find(key) != user_floats.end();
     }
     // 無ければ作って返す（初期値 default_value）
+
     float& ensuref(const std::string& key, float default_value = 0.0f) {
         auto [it, inserted] = user_floats.emplace(key, default_value);
         return it->second;

@@ -44,7 +44,7 @@ void NeneNode::dump_tree_impl(std::ostream& os, const std::string& prefix, bool 
        << prefix
        << (is_last ? "└─ " : "├─ ")
        << "[" << name << "]";
-    if (!valve_sdl_event && !valve_time_lapse && !valve_nene_mail && !valve_render) os << " (inactive)";
+    if (!valve_sdl_event && !valve_nene_input && !valve_time_lapse && !valve_nene_mail && !valve_render) os << " (inactive)";
     else if (!valve_render) os << " (render off)";
     os << "\n";
     const std::string next_prefix = prefix + (is_last ? "   " : "│  ");
@@ -62,16 +62,45 @@ void NeneNode::dump_tree_impl(std::ostream& os, const std::string& prefix, bool 
 void NeneNode::pulse_sdl_event(const SDL_Event& ev) {
     if (!valve_sdl_event) return;
     handle_sdl_event(ev);
-    for (auto& kv : children) {
-        if (kv.second) kv.second->pulse_sdl_event(ev);
+
+    std::vector<std::string> keys;
+    keys.reserve(children.size());
+    for (const auto& kv : children) keys.push_back(kv.first);
+    for (const auto& key : keys) {
+        auto it = children.find(key);
+        if (it == children.end()) continue;
+        if (!it->second) continue;
+        it->second->pulse_sdl_event(ev);
+    }
+}
+
+void NeneNode::pulse_nene_input(const NeneInput& input) {
+    if (!valve_nene_input) return;
+    handle_nene_input(input);
+
+    std::vector<std::string> keys;
+    keys.reserve(children.size());
+    for (const auto& kv : children) keys.push_back(kv.first);
+    for (const auto& key : keys) {
+        auto it = children.find(key);
+        if (it == children.end()) continue;
+        if (!it->second) continue;
+        it->second->pulse_nene_input(input);
     }
 }
 
 void NeneNode::pulse_time_lapse(const float& dt) {
     if (!valve_time_lapse) return;
     handle_time_lapse(dt);
-    for (auto& kv : children) {
-        if (kv.second) kv.second->pulse_time_lapse(dt);
+
+    std::vector<std::string> keys;
+    keys.reserve(children.size());
+    for (const auto& kv : children) keys.push_back(kv.first);
+    for (const auto& key : keys) {
+        auto it = children.find(key);
+        if (it == children.end()) continue;
+        if (!it->second) continue;
+        it->second->pulse_time_lapse(dt);
     }
 }
 
@@ -159,6 +188,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     if (!child) return;
     // 共有サービスを親から引き継ぐ
     child->mail_server = this->mail_server;
+    child->input_server = this->input_server;
     child->asset_loader = this->asset_loader;
     child->font_loader  = this->font_loader;
     child->path_service = this->path_service;
@@ -207,7 +237,7 @@ void NeneNode::clear_children() {
 NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint32 flags, int x, int y, const char* icon_path)
     : NeneNode(std::move(node_name)) {
     // SDL 初期化
-    if (!SDL_Init(SDL_INIT_VIDEO)) { nnthrow("SDL_Init failed"); }
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { nnthrow("SDL_Init failed"); }
     // ウィンドウ生成
     window = SDL_CreateWindow(title, w, h, flags);
     if (!window) { nnthrow("SDL_CreateWindow failed"); }
@@ -227,6 +257,7 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
     }
     // ねねサーバ立ち上げ
     this->mail_server     = std::make_shared<NeneMailServer>();
+    this->input_server    = std::make_shared<NeneInputServer>();
     this->asset_loader    = std::make_shared<NeneImageLoader>(renderer);
     this->font_loader     = std::make_shared<NeneFontLoader>(renderer);
     this->path_service    = std::make_shared<PathService>();
@@ -258,10 +289,18 @@ int NeneRoot::run() {
     nnlog("main loop start");
     Uint64 prev_ticks = SDL_GetTicks();
     while (running) {
+        if (input_server) input_server->begin_frame();
         // SDLイベント
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             pulse_sdl_event(ev);
+        }
+        // NeneInput
+        if (input_server) {
+            NeneInput input;
+            while (input_server->pull(input)) {
+                pulse_nene_input(input);
+            }
         }
         // 時間経過
         Uint64 now_ticks = SDL_GetTicks();
@@ -306,6 +345,67 @@ void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
 void NeneRoot::handle_nene_mail(const NeneMail& mail) {
     if (mail.subject == "show_all" && mail.body.empty()) {
         show_tree();
+    }
+}
+
+// ねね入力通訳
+static float normalize_gamepad_axis_(Sint16 value) {
+    if (value < 0) return static_cast<float>(value) / 32768.0f;
+    return static_cast<float>(value) / 32767.0f;
+}
+
+void NeneInputInterpreter::handle_sdl_event(const SDL_Event& ev) {
+    if (!blackboard) return;
+    const auto map_it = blackboard->input_maps.find(map_name_);
+    if (map_it == blackboard->input_maps.end()) return;
+
+    for (const auto& binding : map_it->second) {
+        if (binding.action.empty()) continue;
+
+        if (binding.device == NeneInputDevice::Keyboard
+            && binding.control == NeneInputControl::Button) {
+            if (ev.type != SDL_EVENT_KEY_DOWN && ev.type != SDL_EVENT_KEY_UP) continue;
+            if (binding.code != static_cast<int>(ev.key.key)) continue;
+
+            const bool down = (ev.type == SDL_EVENT_KEY_DOWN);
+            const NeneInputPhase phase =
+                down ? (ev.key.repeat ? NeneInputPhase::Repeated : NeneInputPhase::Pressed)
+                     : NeneInputPhase::Released;
+            const float value = down ? binding.scale : 0.0f;
+            send_input(NeneInput(this->name, binding.action, phase,
+                                 NeneInputDevice::Keyboard, value, binding.player));
+            continue;
+        }
+
+        if (binding.device == NeneInputDevice::Gamepad
+            && binding.control == NeneInputControl::Button) {
+            if (ev.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN
+                && ev.type != SDL_EVENT_GAMEPAD_BUTTON_UP) continue;
+            if (binding.code != static_cast<int>(ev.gbutton.button)) continue;
+
+            const bool down = (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+            const NeneInputPhase phase =
+                down ? NeneInputPhase::Pressed : NeneInputPhase::Released;
+            const float value = down ? binding.scale : 0.0f;
+            send_input(NeneInput(this->name, binding.action, phase,
+                                 NeneInputDevice::Gamepad, value, binding.player));
+            continue;
+        }
+
+        if (binding.device == NeneInputDevice::Gamepad
+            && binding.control == NeneInputControl::Axis) {
+            if (ev.type != SDL_EVENT_GAMEPAD_AXIS_MOTION) continue;
+            if (binding.code != static_cast<int>(ev.gaxis.axis)) continue;
+
+            const float dead_zone = (binding.dead_zone < 0.0f) ? 0.0f : binding.dead_zone;
+            float value = normalize_gamepad_axis_(ev.gaxis.value) * binding.scale;
+            if (value < dead_zone) value = 0.0f;
+            if (value > 1.0f) value = 1.0f;
+
+            send_input(NeneInput(this->name, binding.action, NeneInputPhase::Changed,
+                                 NeneInputDevice::Gamepad, value, binding.player));
+            continue;
+        }
     }
 }
 

@@ -55,6 +55,17 @@ _pick_target(SDL3_TTF_LIB
   SDL3_ttf::SDL3_ttf-static
 )
 
+# vcpkg's applocal.ps1 uses PowerShell to copy DLLs next to the executable.
+# If the WindowsApps pwsh.exe shim points to a missing package, MSBuild fails
+# in POST_BUILD, so prefer the Windows PowerShell executable with a real path.
+if(WIN32)
+  set(_NENE_WINDOWS_POWERSHELL "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0/powershell.exe")
+  if(EXISTS "${_NENE_WINDOWS_POWERSHELL}")
+    set(Z_VCPKG_POWERSHELL_PATH "${_NENE_WINDOWS_POWERSHELL}"
+        CACHE INTERNAL "The path to the PowerShell implementation to use." FORCE)
+  endif()
+endif()
+
 # ----------------------------
 # NeneEngine library
 # ----------------------------
