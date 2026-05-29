@@ -18,6 +18,21 @@ static constexpr int kStageCount = 3;
 static constexpr float kStageClearScore = 1000.0f;
 static constexpr const char* kStageProgressSlot = "stage_progress";
 static constexpr const char* kStageProgressNode = "stage_progress";
+static constexpr const char* kStageSceneNames[kStageCount] = {
+    "stage_1_scene",
+    "stage_2_scene",
+    "stage_3_scene",
+};
+
+static int clamp_stage(int stage) {
+    if (stage < 1) return 1;
+    if (stage > kStageCount) return kStageCount;
+    return stage;
+}
+
+static const char* stage_scene_name(int stage) {
+    return kStageSceneNames[clamp_stage(stage) - 1];
+}
 
 static std::string stage_clear_key(int stage) {
     return "stage_" + std::to_string(stage) + "_cleared";
@@ -27,6 +42,7 @@ static std::string stage_clear_key(int stage) {
 class Dino final : public NeneNode {
 public:
     explicit Dino(std::string name) : NeneNode(std::move(name)) {}
+    ~Dino() override { remove_colliders_(); }
     SDL_FRect hitbox() const { return SDL_FRect{ x_, y_, w_, h_ }; }
     void set_dead(bool v) { dead_ = v; }
     bool is_dead() const { return dead_; }
@@ -55,30 +71,7 @@ protected:
         anim_idx_ = 0;
         facing_dir_ = 1;
         dead_ = false;
-        // CollisionWorld登録（恐竜の凸近似）
-        NeneColorPolygon poly;
-        poly.owner_name = this->name;
-        // 88x96 のローカル座標で、凸多角形の8点近似（時計回り）
-        poly.vertices = {
-            SDL_FPoint{  6.0f, 28.0f }, // 尻尾/背中側（左上寄り）
-            SDL_FPoint{ 18.0f,  8.0f }, // 背中上
-            SDL_FPoint{ 60.0f,  6.0f }, // 頭上
-            SDL_FPoint{ 80.0f, 30.0f }, // 鼻先〜頭前
-            SDL_FPoint{ 84.0f, 72.0f }, // 体前
-            SDL_FPoint{ 66.0f, 94.0f }, // 足元前（右下）
-            SDL_FPoint{ 22.0f, 94.0f }, // 足元後（左下）
-            SDL_FPoint{  6.0f, 72.0f }, // 体後
-        };
-        poly.position = SDL_FPoint{ x_, y_ };
-        poly.color = NenePolygonColor::Blue; // 味方属性
-        poly.layer = kLayerPlayer;
-        poly.mask  = kMaskPlayerHits;
-        poly.enabled = true;
-        // コライダー可視化設定
-        poly.debug_draw = true;
-        poly.debug_alpha = 0.25f;
-        // コライダー登録
-        collider_id_ = collision_world->add_collider(std::move(poly));
+        register_colliders_();
     }
     // 内部入力
     void handle_nene_input(const NeneInput& input) override {
@@ -117,10 +110,7 @@ protected:
         } else {
             on_ground_ = false;
         }
-        // コライダーの位置も更新する
-        if (collision_world && collider_id_ != 0) {
-            collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
-        }
+        sync_colliders_();
     }
     // レンダリング
     void render(SDL_Renderer* r) override {
@@ -135,18 +125,124 @@ protected:
         }
         // コライダー可視化
         if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
-            if (collision_world && collider_id_ != 0) {
-                if (auto* c = collision_world->find(collider_id_)) {
-                    c->debug_render_filled(r);
+            if (collision_world) {
+                for (const auto id : collider_ids_) {
+                    if (auto* c = collision_world->find(id)) {
+                        c->debug_render_filled(r);
+                    }
                 }
             }
         }
     }
 private:
+    using Vertices = std::vector<SDL_FPoint>;
+
     void try_jump_() {
         if (!on_ground_) return;
         on_ground_ = false;
         vy_ = -jump_speed_;
+    }
+    static Vertices rect_(float x, float y, float rw, float rh) {
+        return Vertices{
+            SDL_FPoint{ x,      y      },
+            SDL_FPoint{ x + rw, y      },
+            SDL_FPoint{ x + rw, y + rh },
+            SDL_FPoint{ x,      y + rh },
+        };
+    }
+    Vertices maybe_flip_(Vertices v) const {
+        if (facing_dir_ >= 0) return v;
+        for (auto& p : v) p.x = w_ - p.x;
+        std::reverse(v.begin(), v.end());
+        return v;
+    }
+    std::vector<Vertices> collider_vertices_(int frame) const {
+        std::vector<Vertices> parts;
+        parts.push_back(maybe_flip_(Vertices{
+            SDL_FPoint{  0.0f, 38.0f },
+            SDL_FPoint{ 12.0f, 34.0f },
+            SDL_FPoint{ 42.0f, 48.0f },
+            SDL_FPoint{ 42.0f, 58.0f },
+            SDL_FPoint{ 14.0f, 56.0f },
+            SDL_FPoint{  0.0f, 50.0f },
+        }));
+        parts.push_back(maybe_flip_(Vertices{
+            SDL_FPoint{ 12.0f, 46.0f },
+            SDL_FPoint{ 52.0f, 40.0f },
+            SDL_FPoint{ 70.0f, 56.0f },
+            SDL_FPoint{ 58.0f, 76.0f },
+            SDL_FPoint{ 22.0f, 78.0f },
+            SDL_FPoint{  8.0f, 58.0f },
+        }));
+        parts.push_back(maybe_flip_(Vertices{
+            SDL_FPoint{ 34.0f, 30.0f },
+            SDL_FPoint{ 58.0f, 30.0f },
+            SDL_FPoint{ 70.0f, 48.0f },
+            SDL_FPoint{ 56.0f, 60.0f },
+            SDL_FPoint{ 30.0f, 50.0f },
+        }));
+        parts.push_back(maybe_flip_(rect_(40.0f, 4.0f, 44.0f, 28.0f)));
+        parts.push_back(maybe_flip_(rect_(56.0f, 28.0f, 24.0f, 18.0f)));
+
+        if (frame == 0) {
+            parts.push_back(maybe_flip_(rect_(20.0f, 76.0f, 16.0f, 20.0f)));
+            parts.push_back(maybe_flip_(rect_(40.0f, 76.0f, 18.0f, 8.0f)));
+        } else {
+            parts.push_back(maybe_flip_(rect_(24.0f, 80.0f, 14.0f, 8.0f)));
+            parts.push_back(maybe_flip_(rect_(40.0f, 80.0f, 16.0f, 16.0f)));
+        }
+        return parts;
+    }
+    int collider_frame_() const {
+        return on_ground_ ? anim_idx_ : 0;
+    }
+    void register_colliders_() {
+        if (!collision_world) return;
+        remove_colliders_();
+        const int frame = collider_frame_();
+        const auto parts = collider_vertices_(frame);
+        collider_ids_.reserve(parts.size());
+        for (const auto& vertices : parts) {
+            NeneColorPolygon poly;
+            poly.owner_name = this->name;
+            poly.vertices = vertices;
+            poly.position = SDL_FPoint{ x_, y_ };
+            poly.color = NenePolygonColor::Blue;
+            poly.layer = kLayerPlayer;
+            poly.mask  = kMaskPlayerHits;
+            poly.enabled = true;
+            poly.debug_draw = true;
+            poly.debug_alpha = 0.25f;
+            collider_ids_.push_back(collision_world->add_collider(std::move(poly)));
+        }
+        collider_frame_cache_ = frame;
+        collider_facing_cache_ = facing_dir_;
+    }
+    void sync_colliders_() {
+        if (!collision_world) return;
+        const int frame = collider_frame_();
+        if (frame != collider_frame_cache_ || facing_dir_ != collider_facing_cache_) {
+            const auto parts = collider_vertices_(frame);
+            const std::size_t n = std::min(collider_ids_.size(), parts.size());
+            for (std::size_t i = 0; i < n; ++i) {
+                if (auto* c = collision_world->find(collider_ids_[i])) {
+                    c->vertices = parts[i];
+                }
+            }
+            collider_frame_cache_ = frame;
+            collider_facing_cache_ = facing_dir_;
+        }
+        for (const auto id : collider_ids_) {
+            collision_world->set_position(id, SDL_FPoint{ x_, y_ });
+        }
+    }
+    void remove_colliders_() {
+        if (collision_world) {
+            for (const auto id : collider_ids_) {
+                collision_world->remove_collider(id);
+            }
+        }
+        collider_ids_.clear();
     }
     // コライダー設定
     static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
@@ -174,7 +270,9 @@ private:
     float jump_speed_    = 900.0f;
     float run_frame_sec_ = 0.10f;
     // CollisionWorld登録ID
-    NeneCollisionWorld::ColliderId collider_id_ = 0;
+    std::vector<NeneCollisionWorld::ColliderId> collider_ids_;
+    int collider_frame_cache_ = -1;
+    int collider_facing_cache_ = 1;
 };
 
 // 地面
@@ -396,6 +494,145 @@ private:
     float next_spawn_in_ = 1.0f;
 };
 
+// プテラノドン
+class Pteranodon final : public NeneNode {
+public:
+    struct Variant {
+        float ground_clearance;
+    };
+    Pteranodon(std::string name, Variant v)
+        : NeneNode(std::move(name)), variant_(v) {}
+    ~Pteranodon() override {
+        if (collision_world && collider_id_ != 0) {
+            collision_world->remove_collider(collider_id_);
+            collider_id_ = 0;
+        }
+    }
+
+protected:
+    void init_node() override {
+        if (!asset_loader || !path_service || !blackboard) nnthrow("services not ready (asset_loader/path_service/blackboard)");
+        if (!collision_world) nnthrow("services not ready (collision_world)");
+        sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
+        if (!sprite_tex_) nnthrow("failed to load sprite texture");
+
+        src_[0] = SDL_FRect{ 260.0f, 0.0f, 92.0f, 80.0f };
+        src_[1] = SDL_FRect{ 352.0f, 0.0f, 92.0f, 80.0f };
+        w_ = 92.0f;
+        h_ = 80.0f;
+        x_ = static_cast<float>(blackboard->window_w) + spawn_margin_;
+        y_ = blackboard->ground_y - variant_.ground_clearance - h_;
+
+        NeneColorPolygon poly;
+        poly.owner_name = this->name;
+        poly.vertices = {
+            SDL_FPoint{ 8.0f, 10.0f },
+            SDL_FPoint{ w_ - 8.0f, 10.0f },
+            SDL_FPoint{ w_ - 8.0f, h_ - 8.0f },
+            SDL_FPoint{ 8.0f, h_ - 8.0f },
+        };
+        poly.position = SDL_FPoint{ x_, y_ };
+        poly.color = NenePolygonColor::Red;
+        poly.layer = kLayerObstacle;
+        poly.mask  = kMaskObstacleHits;
+        poly.enabled = true;
+        poly.debug_draw = true;
+        poly.debug_alpha = 0.25f;
+        collider_id_ = collision_world->add_collider(std::move(poly));
+    }
+    void handle_time_lapse(const float& dt) override {
+        if (!blackboard) return;
+        anim_accum_ += dt;
+        if (anim_accum_ >= anim_frame_sec_) {
+            anim_accum_ = 0.0f;
+            anim_idx_ = (anim_idx_ + 1) % 2;
+        }
+
+        x_ -= blackboard->scroll_speed * flight_speed_multiplier_ * dt;
+        if (collision_world && collider_id_ != 0) {
+            collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
+        }
+        if (x_ + w_ < -despawn_margin_) {
+            send_mail(NeneMail("pteranodon_factory", this->name, "despawn", this->name));
+        }
+    }
+    void render(SDL_Renderer* r) override {
+        if (!r || !sprite_tex_) return;
+        SDL_FRect dst{ x_, y_, w_, h_ };
+        SDL_RenderTexture(r, sprite_tex_, &src_[anim_idx_], &dst);
+        if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
+            if (collision_world && collider_id_ != 0) {
+                if (auto* c = collision_world->find(collider_id_)) {
+                    c->debug_render_filled(r);
+                }
+            }
+        }
+    }
+
+private:
+    static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
+    static constexpr std::uint32_t kLayerObstacle = 1u << 1;
+    static constexpr std::uint32_t kMaskObstacleHits = kLayerPlayer;
+    Variant variant_;
+    SDL_Texture* sprite_tex_ = nullptr;
+    SDL_FRect src_[2]{};
+    float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
+    float spawn_margin_ = 80.0f;
+    float despawn_margin_ = 80.0f;
+    float anim_accum_ = 0.0f;
+    int anim_idx_ = 0;
+    float anim_frame_sec_ = 0.16f;
+    float flight_speed_multiplier_ = 1.2f;
+    NeneCollisionWorld::ColliderId collider_id_ = 0;
+};
+
+// プテラノドン工場
+class PteranodonFactory final : public NeneFactory {
+public:
+    explicit PteranodonFactory(std::string name)
+        : NeneFactory(std::move(name)) {}
+protected:
+    void init_node() override {
+        pteranodon_variants_ = {
+            // 低空: 地上の恐竜に当たるのでジャンプで回避する
+            { 12.0f },
+            // 高空: 地上では下を通れるが、ジャンプすると当たりやすい
+            { 110.0f },
+        };
+        spawn_accum_ = 0.0f;
+        obstacle_seq_ = 0;
+        next_spawn_in_ = frand_(1.3f, 2.3f);
+    }
+    void handle_time_lapse(const float& dt) override {
+        spawn_accum_ += dt;
+        if (spawn_accum_ >= next_spawn_in_) {
+            spawn_accum_ = 0.0f;
+            spawn_obstacle_();
+            next_spawn_in_ = frand_(1.8f, 3.2f);
+        }
+    }
+    void handle_nene_mail(const NeneMail& mail) override {
+        if (mail.subject == "despawn") remove_child(mail.body);
+    }
+private:
+    void spawn_obstacle_() {
+        if (pteranodon_variants_.empty()) nnthrow("pteranodon_variants_ is empty");
+        std::uniform_int_distribution<int> dist(0, static_cast<int>(pteranodon_variants_.size()) - 1);
+        const auto v = pteranodon_variants_[dist(rng_)];
+        const std::string name = "pteranodon_" + std::to_string(obstacle_seq_++);
+        add_child(std::make_unique<Pteranodon>(name, v));
+    }
+    static float frand_(float a, float b) {
+        const float t = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
+        return a + (b - a) * t;
+    }
+    std::mt19937 rng_{ std::random_device{}() };
+    std::vector<Pteranodon::Variant> pteranodon_variants_;
+    float spawn_accum_ = 0.0f;
+    int obstacle_seq_ = 0;
+    float next_spawn_in_ = 1.0f;
+};
+
 // 審判（CollisionWorldを監視し続ける）
 class Referee final : public NeneNode {
 public:
@@ -408,50 +645,29 @@ protected:
         (void)dt;
         if (!collision_world) nnthrow("collision world lost");
         if (blackboard && blackboard->getf("stage_clear", 0.0f) > 0.5f) return;
-        // まだターゲットIDが無いなら探す
-        // (生成順など都合で最初の数フレームだけターゲットが無くても問題ない)
-        if (target_id_ == 0) {
-            target_id_ = find_target_id_();
-            if (target_id_ == 0) return;
-        }
-        NeneColorPolygon* target = collision_world->find(target_id_);
-        // ターゲットを見つけられなかったとき
-        // (理論上起きないはず)
-        if (!target) {
-            nnerr("target lost");
-            target_id_ = 0;
-            prev_.clear();
-            return;
-        }
         std::unordered_set<Id> now;
-        // 衝突判定
-        if (auto hit = collision_world->detect_collision(*target)) {
-            const NeneColorPolygon& other = hit->get();
-            now.insert(other.id);
-            if (prev_.find(other.id) == prev_.end()) {
-                nnlog("collision detected");
-                std::ostringstream oss;
-                oss << "target=" << target_name_
-                    << " other=" << other.owner_name
-                    << " color=" << static_cast<int>(other.color);
-                send_mail(NeneMail(this->name, "collision_detected", oss.str()));
+        for (const auto& target : collision_world->colliders()) {
+            if (!target.enabled) continue;
+            if (target.owner_name != target_name_) continue;
+            if (auto hit = collision_world->detect_collision(target)) {
+                const NeneColorPolygon& other = hit->get();
+                now.insert(other.id);
+                if (prev_.find(other.id) == prev_.end()) {
+                    nnlog("collision detected");
+                    std::ostringstream oss;
+                    oss << "target=" << target_name_
+                        << " other=" << other.owner_name
+                        << " color=" << static_cast<int>(other.color);
+                    send_mail(NeneMail(this->name, "collision_detected", oss.str()));
+                }
             }
         }
         prev_.swap(now);
     }
 private:
     using Id = NeneCollisionWorld::ColliderId;
-    Id find_target_id_() const {
-        if (!collision_world) return 0;
-        for (const auto& c : collision_world->colliders()) {
-            if (!c.enabled) continue;
-            if (c.owner_name == target_name_) return c.id;
-        }
-        return 0;
-    }
     std::unordered_set<Id> prev_;
     std::string target_name_ = "dino";
-    Id target_id_ = 0;
 };
 
 
@@ -465,6 +681,10 @@ protected:
         add_child(std::make_unique<Dino>("dino"));
         add_child(std::make_unique<Referee>("referee"));
         add_child(std::make_unique<CactusFactory>("cactus_factory"));
+        const int stage = blackboard ? clamp_stage(static_cast<int>(blackboard->getf("selected_stage", 1.0f))) : 1;
+        if (stage == 2) {
+            add_child(std::make_unique<PteranodonFactory>("pteranodon_factory"));
+        }
     }
     void handle_time_lapse(const float& dt) override {
         if (blackboard) {
@@ -597,7 +817,9 @@ protected:
         if (!game_over && !stage_clear) return;
         if (ev.type == SDL_EVENT_KEY_DOWN) {
             if (ev.key.key == SDLK_SPACE) {
-                const char* next_scene = stage_clear ? "stage_select_scene" : "play_scene";
+                const char* next_scene = stage_clear
+                    ? "stage_select_scene"
+                    : stage_scene_name(static_cast<int>(blackboard->getf("selected_stage", 1.0f)));
                 send_mail(NeneMail("scene_switch", this->name, "switch_to", next_scene));
             }
         }
@@ -625,10 +847,12 @@ private:
 // プレイシーン
 class PlayScene final : public NeneNode {
 public:
-    explicit PlayScene(std::string name) : NeneNode(std::move(name)) {}
+    explicit PlayScene(std::string name, int stage)
+        : NeneNode(std::move(name)), stage_(clamp_stage(stage)) {}
 protected:
-    void init_node(){
+    void init_node() override {
         if (blackboard) {
+            blackboard->setf("selected_stage", static_cast<float>(stage_));
             blackboard->setf("score", 0.0f);
             blackboard->setf("game_over", 0.0f);
             blackboard->setf("stage_clear", 0.0f);
@@ -662,9 +886,7 @@ private:
             nnerr("save service is not configured");
             return;
         }
-        int stage = static_cast<int>(blackboard->getf("selected_stage", 1.0f));
-        if (stage < 1) stage = 1;
-        if (stage > kStageCount) stage = kStageCount;
+        const int stage = stage_;
 
         NeneSaveDocument doc;
         if (save_service->slot_exists(kStageProgressSlot)) {
@@ -687,6 +909,7 @@ private:
             nnerr(std::string("failed to save stage progress: ") + e.what());
         }
     }
+    int stage_ = 1;
     bool stage_clear_saved_ = false;
 };
 
@@ -1032,7 +1255,7 @@ protected:
         if (ev.key.key == SDLK_SPACE) {
             if (!is_stage_unlocked_(selected_stage_)) return;
             if (blackboard) blackboard->setf("selected_stage", static_cast<float>(selected_stage_));
-            send_mail(NeneMail("scene_switch", this->name, "switch_to", "play_scene"));
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", stage_scene_name(selected_stage_)));
             return;
         }
         if (ev.key.key == SDLK_ESCAPE) {
@@ -1204,9 +1427,12 @@ protected:
         register_node("stage_select_scene", [] {
             return std::make_unique<StageSelectScene>("stage_select_scene");
         });
-        register_node("play_scene", [] {
-            return std::make_unique<PlayScene>("play_scene");
-        });
+        for (int stage = 1; stage <= kStageCount; ++stage) {
+            const std::string scene_name = stage_scene_name(stage);
+            register_node(scene_name, [scene_name, stage] {
+                return std::make_unique<PlayScene>(scene_name, stage);
+            });
+        }
         set_initial_node("title_scene");
     }
 };
