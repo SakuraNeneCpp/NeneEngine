@@ -11,6 +11,53 @@
 NeneNode::NeneNode(std::string node_name)
     : name(std::move(node_name)) {}
 
+static std::string join_save_path_(std::string_view base, std::string_view child) {
+    if (base.empty()) return std::string(child);
+    if (child.empty()) return std::string(base);
+    return std::string(base) + "/" + std::string(child);
+}
+
+void NeneNode::set_save_service(std::shared_ptr<NeneSaveService> service) {
+    save_service = std::move(service);
+    for (auto& kv : children) {
+        if (kv.second) kv.second->set_save_service(save_service);
+    }
+}
+
+void NeneNode::save_subtree(NeneSaveDocument& doc, std::string_view path) const {
+    auto& record = doc.node(std::string(path));
+    record.type = save_type();
+    NeneSaveWriter writer(record);
+    save_state(writer);
+
+    std::vector<std::string> keys;
+    keys.reserve(children.size());
+    for (const auto& kv : children) keys.push_back(kv.first);
+    for (const auto& key : keys) {
+        auto it = children.find(key);
+        if (it == children.end()) continue;
+        if (!it->second) continue;
+        it->second->save_subtree(doc, join_save_path_(path, key));
+    }
+}
+
+void NeneNode::load_subtree(const NeneSaveDocument& doc, std::string_view path) {
+    if (const auto* record = doc.find_node(path)) {
+        NeneSaveReader reader(*record);
+        load_state(reader);
+    }
+
+    std::vector<std::string> keys;
+    keys.reserve(children.size());
+    for (const auto& kv : children) keys.push_back(kv.first);
+    for (const auto& key : keys) {
+        auto it = children.find(key);
+        if (it == children.end()) continue;
+        if (!it->second) continue;
+        it->second->load_subtree(doc, join_save_path_(path, key));
+    }
+}
+
 // ターミナル出力
 void NeneNode::nnlog(std::string_view msg) const {
     std::cout << "[" << this->name << "] " << msg << "\n";
@@ -192,6 +239,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     child->asset_loader = this->asset_loader;
     child->font_loader  = this->font_loader;
     child->path_service = this->path_service;
+    child->save_service = this->save_service;
     child->blackboard = this->blackboard;
     child->collision_world = this->collision_world;
     // 親を設定
@@ -278,6 +326,28 @@ NeneRoot::~NeneRoot() {
     SDL_Quit();
 }
 
+void NeneRoot::configure_save_service(std::string org, std::string app,
+                                      std::string save_dir, std::string extension) {
+    set_save_service(std::make_shared<NeneSaveService>(
+        std::move(org), std::move(app), std::move(save_dir), std::move(extension)));
+}
+
+void NeneRoot::save_tree_to_slot(std::string_view slot_name) const {
+    if (!save_service) nnthrow("save_tree_to_slot: save_service is not configured");
+    if (!tree_built) nnthrow("save_tree_to_slot: tree is not initialized");
+    NeneSaveDocument doc;
+    doc.set_metadata("root_name", name);
+    save_subtree(doc);
+    save_service->save(slot_name, doc);
+}
+
+void NeneRoot::load_tree_from_slot(std::string_view slot_name) {
+    if (!save_service) nnthrow("load_tree_from_slot: save_service is not configured");
+    if (!tree_built) nnthrow("load_tree_from_slot: tree is not initialized");
+    const NeneSaveDocument doc = save_service->load(slot_name);
+    load_subtree(doc);
+}
+
 int NeneRoot::run() {
     if (!tree_built) {
         init_node();
@@ -315,6 +385,7 @@ int NeneRoot::run() {
             }
         }
         // render (ここだけ幅優先)
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         pulse_render(renderer);
         SDL_RenderPresent(renderer);
@@ -343,6 +414,10 @@ void NeneRoot::handle_sdl_event(const SDL_Event& ev) {
 }
 
 void NeneRoot::handle_nene_mail(const NeneMail& mail) {
+    if (mail.subject == "quit") {
+        running = false;
+        return;
+    }
     if (mail.subject == "show_all" && mail.body.empty()) {
         show_tree();
     }

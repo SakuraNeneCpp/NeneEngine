@@ -36,6 +36,11 @@
 - シーンごとに入力の意味が変わる場合は, そのシーン直下に `NeneInputInterpreter` を置き, シーン破棄・停止と一緒に入力解釈も止まるようにする.
 - パルス順は `SDL event -> NeneInput -> TimeLapse -> NeneMail -> render` を維持する. 入力を `NeneMail` に置き換えると `TimeLapse` より後ろに回り, 1フレーム遅れる可能性がある.
 
+### NeneSave
+- セーブ対象は `NeneNode` オブジェクトや SDL リソースそのものではなく, ノード部分木の意味的な状態スナップショットにする.
+- `SDL_Texture*`, collider id, input/mail queue, render cache などのランタイム資源は保存せず, `init_node()` などで再構築した後に `load_state()` で状態だけ戻す.
+- 保存先は実行ファイルや `assets/` 配下ではなく, `NeneSaveService` が `SDL_GetPrefPath(org, app)` から解決するユーザー別の保存領域に置く.
+
 ### Windows / CMake
 - このリポジトリのテキストファイルはCRLF前提のものが多い. 編集後に mixed EOL になると VS Code の IntelliSense が大量の偽エラーを出すことがあるため, 既存の改行種別に揃える.
 - Markdown (`.md`) の行末空白はビュワーによって改行として扱われることがあるため, 自動整形や改行統一の際にも削除しない.

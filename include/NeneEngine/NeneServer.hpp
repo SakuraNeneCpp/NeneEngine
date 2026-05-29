@@ -4,6 +4,7 @@
 #include <optional>
 #include <string_view>
 #include <string>
+#include <map>
 #include <unordered_map>
 #include <stdexcept>
 #include <vector>
@@ -542,6 +543,82 @@ public:
 private:
     std::string base_path_;
     std::string assets_dir_;
+};
+
+// NeneSave
+// ノード部分木の「再構築可能な状態」だけを保存するための軽量データ形式。
+class NeneSaveNodeRecord {
+public:
+    std::string type;
+    std::map<std::string, std::string> values;
+};
+
+class NeneSaveWriter {
+public:
+    explicit NeneSaveWriter(NeneSaveNodeRecord& record);
+    void set(std::string key, std::string value);
+    void set(std::string key, const char* value);
+    void set_bool(std::string key, bool value);
+    void set_int(std::string key, int value);
+    void set_uint(std::string key, std::uint32_t value);
+    void set_float(std::string key, float value);
+    void set_double(std::string key, double value);
+private:
+    NeneSaveNodeRecord* record_;
+};
+
+class NeneSaveReader {
+public:
+    explicit NeneSaveReader(const NeneSaveNodeRecord& record);
+    bool has(std::string_view key) const;
+    std::string get_string(std::string_view key, std::string default_value = "") const;
+    bool get_bool(std::string_view key, bool default_value = false) const;
+    int get_int(std::string_view key, int default_value = 0) const;
+    std::uint32_t get_uint(std::string_view key, std::uint32_t default_value = 0) const;
+    float get_float(std::string_view key, float default_value = 0.0f) const;
+    double get_double(std::string_view key, double default_value = 0.0) const;
+    const NeneSaveNodeRecord& record() const { return *record_; }
+private:
+    const NeneSaveNodeRecord* record_;
+};
+
+class NeneSaveDocument {
+public:
+    static constexpr std::uint32_t current_format_version = 1;
+    std::uint32_t format_version = current_format_version;
+    std::map<std::string, std::string> metadata;
+    std::map<std::string, NeneSaveNodeRecord> nodes;
+
+    void clear();
+    void set_metadata(std::string key, std::string value);
+    bool has_metadata(std::string_view key) const;
+    std::string get_metadata(std::string_view key, std::string default_value = "") const;
+    NeneSaveNodeRecord& node(std::string path);
+    const NeneSaveNodeRecord* find_node(std::string_view path) const;
+    bool has_node(std::string_view path) const;
+    std::string serialize() const;
+    static NeneSaveDocument parse(std::string_view text);
+};
+
+class NeneSaveService {
+public:
+    NeneSaveService(std::string org, std::string app,
+                    std::string save_dir = "saves",
+                    std::string extension = ".nnsave");
+    const std::string& base_path() const { return base_path_; }
+    const std::string& save_dir_path() const { return save_dir_path_; }
+    const std::string& extension() const { return extension_; }
+    std::string slot_path(std::string_view slot_name) const;
+    bool slot_exists(std::string_view slot_name) const;
+    void save(std::string_view slot_name, const NeneSaveDocument& doc) const;
+    NeneSaveDocument load(std::string_view slot_name) const;
+    bool remove(std::string_view slot_name) const;
+    std::vector<std::string> list_slots() const;
+private:
+    std::string base_path_;
+    std::string save_dir_path_;
+    std::string extension_;
+    static std::string checked_slot_name_(std::string_view slot_name);
 };
 
 

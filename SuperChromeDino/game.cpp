@@ -10,8 +10,18 @@
 #include <random>
 #include <cmath>
 #include <vector>
+#include <algorithm>
 #include <SDL3/SDL.h>
 #include <NeneEngine/NeneNode.hpp>
+
+static constexpr int kStageCount = 3;
+static constexpr float kStageClearScore = 1000.0f;
+static constexpr const char* kStageProgressSlot = "stage_progress";
+static constexpr const char* kStageProgressNode = "stage_progress";
+
+static std::string stage_clear_key(int stage) {
+    return "stage_" + std::to_string(stage) + "_cleared";
+}
 
 // 恐竜
 class Dino final : public NeneNode {
@@ -397,6 +407,7 @@ protected:
     void handle_time_lapse(const float& dt) override {
         (void)dt;
         if (!collision_world) nnthrow("collision world lost");
+        if (blackboard && blackboard->getf("stage_clear", 0.0f) > 0.5f) return;
         // まだターゲットIDが無いなら探す
         // (生成順など都合で最初の数フレームだけターゲットが無くても問題ない)
         if (target_id_ == 0) {
@@ -466,11 +477,20 @@ protected:
             blackboard->setf("world_scroll_speed", speed);
             float& score = blackboard->ensuref("score", 0.0f);
             if (speed > 0.0f) score += dt * 100.0f; // 右へ進んだ時間を得点化
+            if (score >= kStageClearScore && blackboard->getf("stage_clear", 0.0f) < 0.5f) {
+                score = kStageClearScore;
+                blackboard->setf("stage_clear", 1.0f);
+                blackboard->setf("world_scroll_speed", 0.0f);
+                this->valve_time_lapse = false;
+                this->valve_sdl_event = false;
+                send_mail(NeneMail(this->name, "stage_cleared", ""));
+            }
         }
     }
     void handle_nene_mail(const NeneMail& mail) override {
         // Referee のブロードキャストを受けた時
         if (mail.subject == "collision_detected") {
+            if (blackboard && blackboard->getf("stage_clear", 0.0f) > 0.5f) return;
             // World 以下の time_lapse, sdl_event パルスを遮断
             this->valve_time_lapse = false;
             this->valve_sdl_event = false;
@@ -494,6 +514,8 @@ protected:
         // 固定テキストは一度だけ作ればOK
         game_over_tex_ = font_loader->get_text_texture(font_path_, 64, "Game Over", SDL_Color{255,255,255,255});
         restart_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Restart", SDL_Color{255,255,255,255});
+        stage_clear_tex_ = font_loader->get_text_texture(font_path_, 64, "Stage Clear", SDL_Color{255,255,255,255});
+        stage_select_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Stage Select", SDL_Color{255,255,255,255});
         // スコア初期テクスチャ
         update_score_texture_(0);
         // 初期状態
@@ -512,9 +534,10 @@ protected:
             last_score_int_ = score_i;
             update_score_texture_(score_i);
         }
-        // Game Over 中だけ「Press...」を点滅
+        // 終了表示中だけ「Press...」を点滅
         const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
-        if (game_over) {
+        const bool stage_clear = (blackboard->getf("stage_clear", 0.0f) > 0.5f);
+        if (game_over || stage_clear) {
             blink_accum_ += dt;
             if (blink_accum_ >= 0.5f) {
                 blink_accum_ = 0.0f;
@@ -541,38 +564,41 @@ protected:
             sw, sh
         };
         SDL_RenderTexture(r, score_tex_, nullptr, &score_dst);
-        // Game Over文字
         const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
-        if (!game_over) return;
-        if (game_over_tex_) {
+        const bool stage_clear = (blackboard->getf("stage_clear", 0.0f) > 0.5f);
+        if (!game_over && !stage_clear) return;
+        SDL_Texture* message_tex = game_over ? game_over_tex_ : stage_clear_tex_;
+        SDL_Texture* prompt_tex = game_over ? restart_tex_ : stage_select_tex_;
+        if (message_tex) {
             float gw = 0.0f, gh = 0.0f;
-            SDL_GetTextureSize(game_over_tex_, &gw, &gh);
+            SDL_GetTextureSize(message_tex, &gw, &gh);
             SDL_FRect go_dst{
                 (static_cast<float>(w) - gw) * 0.5f,
                 (static_cast<float>(h) - gh) * 0.5f - 40.0f,
                 gw, gh
             };
-            SDL_RenderTexture(r, game_over_tex_, nullptr, &go_dst);
+            SDL_RenderTexture(r, message_tex, nullptr, &go_dst);
         }
-        if (restart_tex_ && press_visible_) {
+        if (prompt_tex && press_visible_) {
             float rw = 0.0f, rh = 0.0f;
-            SDL_GetTextureSize(restart_tex_, &rw, &rh);
+            SDL_GetTextureSize(prompt_tex, &rw, &rh);
             SDL_FRect rs_dst{
                 (static_cast<float>(w) - rw) * 0.5f,
                 (static_cast<float>(h) - rh) * 0.5f + 40.0f,
                 rw, rh
             };
-            SDL_RenderTexture(r, restart_tex_, nullptr, &rs_dst);
+            SDL_RenderTexture(r, prompt_tex, nullptr, &rs_dst);
         }
     }
     void handle_sdl_event(const SDL_Event& ev) override {
         if (!blackboard) return;
         const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
-        if (!game_over) return;
+        const bool stage_clear = (blackboard->getf("stage_clear", 0.0f) > 0.5f);
+        if (!game_over && !stage_clear) return;
         if (ev.type == SDL_EVENT_KEY_DOWN) {
             if (ev.key.key == SDLK_SPACE) {
-                // スイッチ: PlayScene → PlayScene (これでリセットできる)
-                send_mail(NeneMail("scene_switch", this->name, "switch_to", "play_scene"));
+                const char* next_scene = stage_clear ? "stage_select_scene" : "play_scene";
+                send_mail(NeneMail("scene_switch", this->name, "switch_to", next_scene));
             }
         }
     }
@@ -588,6 +614,8 @@ private:
     SDL_Texture* score_tex_ = nullptr;
     SDL_Texture* game_over_tex_ = nullptr;
     SDL_Texture* restart_tex_ = nullptr;
+    SDL_Texture* stage_clear_tex_ = nullptr;
+    SDL_Texture* stage_select_tex_ = nullptr;
     int last_score_int_ = 0;
     float blink_accum_ = 0.0f;
     bool  press_visible_ = true;
@@ -603,6 +631,7 @@ protected:
         if (blackboard) {
             blackboard->setf("score", 0.0f);
             blackboard->setf("game_over", 0.0f);
+            blackboard->setf("stage_clear", 0.0f);
             blackboard->setf("world_scroll_speed", 0.0f);
             // コライダー可視化
             blackboard->setf("show_hitbox", 1.0f);
@@ -620,6 +649,45 @@ protected:
         add_child(std::make_unique<World>("world"));
         add_child(std::make_unique<Overlay>("overlay"));
     }
+    void handle_nene_mail(const NeneMail& mail) override {
+        if (mail.subject != "stage_cleared") return;
+        if (stage_clear_saved_) return;
+        stage_clear_saved_ = true;
+        save_stage_clear_();
+    }
+private:
+    void save_stage_clear_() {
+        if (!blackboard) return;
+        if (!save_service) {
+            nnerr("save service is not configured");
+            return;
+        }
+        int stage = static_cast<int>(blackboard->getf("selected_stage", 1.0f));
+        if (stage < 1) stage = 1;
+        if (stage > kStageCount) stage = kStageCount;
+
+        NeneSaveDocument doc;
+        if (save_service->slot_exists(kStageProgressSlot)) {
+            try {
+                doc = save_service->load(kStageProgressSlot);
+            } catch (const std::exception& e) {
+                nnerr(std::string("failed to load stage progress; recreating: ") + e.what());
+                doc.clear();
+            }
+        }
+        try {
+            auto& record = doc.node(kStageProgressNode);
+            record.type = kStageProgressNode;
+            NeneSaveWriter writer(record);
+            writer.set_bool(stage_clear_key(stage), true);
+            save_service->save(kStageProgressSlot, doc);
+            const int next_stage = (stage < kStageCount) ? stage + 1 : stage;
+            blackboard->setf("selected_stage", static_cast<float>(next_stage));
+        } catch (const std::exception& e) {
+            nnerr(std::string("failed to save stage progress: ") + e.what());
+        }
+    }
+    bool stage_clear_saved_ = false;
 };
 
 // タイトルシーン
@@ -632,75 +700,496 @@ protected:
         if (!asset_loader || !font_loader || !path_service) nnthrow("services not ready (asset_loader/font_loader/path_service)");
         // スプライト
         sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
+        lock_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/GoogleFontsIcons/lock_40dp_FFFFFF_FILL0_wght400_GRAD0_opsz40.png"));
+        key_up_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_up.png"));
+        key_down_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_down.png"));
+        key_space_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_space_icon.png"));
         // フォント
         font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         // タイトル文字
         title_tex_ = font_loader->get_text_texture(font_path_, 56, "SuperChromeDino", SDL_Color{255, 255, 255, 255});
-        // 「Press...」文字
-        press_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Start", SDL_Color{255, 255, 255, 255});
+        continue_tex_ = font_loader->get_text_texture(font_path_, 32, "Continue", SDL_Color{255, 255, 255, 255});
+        continue_disabled_tex_ = font_loader->get_text_texture(font_path_, 32, "Continue", SDL_Color{150, 150, 150, 255});
+        new_game_tex_ = font_loader->get_text_texture(font_path_, 32, "New Game", SDL_Color{255, 255, 255, 255});
+        quit_game_tex_ = font_loader->get_text_texture(font_path_, 32, "Quit Game", SDL_Color{255, 255, 255, 255});
+        select_tex_ = font_loader->get_text_texture(font_path_, 24, "Select", SDL_Color{255, 255, 255, 255});
+        confirm_tex_ = font_loader->get_text_texture(font_path_, 24, "Confirm", SDL_Color{255, 255, 255, 255});
+        continue_available_ = save_service && save_service->slot_exists(kStageProgressSlot);
+        selected_item_ = continue_available_ ? MenuItem::Continue : MenuItem::NewGame;
     }
     void render(SDL_Renderer* r) override {
         if (!r) return;
-        if (!sprite_tex_ || !title_tex_ || !press_tex_) return;
+        if (!sprite_tex_ || !title_tex_) return;
         // 画面サイズ
         int w = 0, h = 0;
         if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
+        const float ww = static_cast<float>(w);
+        const float wh = static_cast<float>(h);
+        const float unit = std::min(ww, wh);
         // 恐竜 (テクスチャアトラス内)
         const SDL_FRect dino_src { 1514.2f, 0.0f, 88.0f, 96.0f };
-        const float dino_w = 88.0f;
-        const float dino_h = 96.0f;
+        const float dino_h = unit * 0.174f;
+        const float dino_w = dino_h * (88.0f / 96.0f);
         // タイトル文字のテクスチャサイズ
         float text_w = 0.0f, text_h = 0.0f;
         if (!SDL_GetTextureSize(title_tex_, &text_w, &text_h)) {
             text_w = 0.0f;
             text_h = 0.0f;
         }
-        // 「Press...」文字サイズ
-        float press_w = 0.0f, press_h = 0.0f;
-        SDL_GetTextureSize(press_tex_, &press_w, &press_h);
         // 横並びレイアウト：中央寄せ
         const float gap = 28.0f;
         const float total_w = dino_w + gap + text_w;
         const float group_h = (dino_h > text_h) ? dino_h : text_h;
-        const float x0 = (static_cast<float>(w) - total_w) * 0.5f;
-        const float y0 = (static_cast<float>(h) * 0.5f) - (group_h * 0.5f); // 画面のちょうど半分の高さ
+        const float x0 = (ww - total_w) * 0.5f;
+        const float y0 = wh * 0.37f - group_h * 0.5f;
         SDL_FRect dino_dst { x0, y0 + (group_h - dino_h) * 0.5f, dino_w, dino_h };
         SDL_FRect text_dst { x0 + dino_w + gap, y0 + (group_h - text_h) * 0.5f, text_w, text_h };
         SDL_RenderTexture(r, sprite_tex_, &dino_src, &dino_dst);
         SDL_RenderTexture(r, title_tex_, nullptr, &text_dst);
-        // 「Press...」を少し下に、中央寄せ、点滅
-        if (press_visible_) {
-            const float press_x = (static_cast<float>(w) - press_w) * 0.5f;
-            const float press_y = y0 + group_h + 40.0f;
-            SDL_FRect press_dst{ press_x, press_y, press_w, press_h };
-            SDL_RenderTexture(r, press_tex_, nullptr, &press_dst);
+
+        const float menu_x = ww * 0.442f;
+        const float menu_y = wh * 0.674f;
+        const float menu_gap = unit * 0.052f;
+        render_menu_item_(r, MenuItem::Continue, continue_available_ ? continue_tex_ : continue_disabled_tex_,
+                          menu_x, menu_y);
+        render_menu_item_(r, MenuItem::NewGame, new_game_tex_, menu_x, menu_y + menu_gap);
+        render_menu_item_(r, MenuItem::QuitGame, quit_game_tex_, menu_x, menu_y + menu_gap * 2.0f);
+        if (!continue_available_) {
+            const float lock_size = unit * 0.037f;
+            float continue_w = 0.0f, continue_h = 0.0f;
+            if (continue_disabled_tex_) SDL_GetTextureSize(continue_disabled_tex_, &continue_w, &continue_h);
+            render_texture_scaled_centered_(r, lock_tex_, menu_x - unit * 0.052f, menu_y + continue_h * 0.5f,
+                                            lock_size, lock_size);
         }
+        render_controls_(r, ww, wh, unit);
     }
     void handle_sdl_event(const SDL_Event& ev) override
     {
-        if (ev.type == SDL_EVENT_KEY_DOWN) {
-            if (ev.key.key == SDLK_SPACE) {
-                // scene_switch にメールでシーン切替要求
-                // (to, from, subject, body)
-                send_mail(NeneMail("scene_switch", this->name, "switch_to", "play_scene"));
-            }
+        if (ev.type != SDL_EVENT_KEY_DOWN) return;
+        if (ev.key.repeat) return;
+        if (ev.key.key == SDLK_UP) {
+            move_selection_(-1);
+            return;
         }
-    }
-    void handle_time_lapse(const float& dt) override
-    {
-        blink_accum_ += dt;
-        if (blink_accum_ >= 0.5f) { // 0.5秒ごとにON/OFF
-            blink_accum_ = 0.0f;
-            press_visible_ = !press_visible_;
+        if (ev.key.key == SDLK_DOWN) {
+            move_selection_(1);
+            return;
+        }
+        if (ev.key.key == SDLK_SPACE) {
+            decide_();
         }
     }
 private:
+    enum class MenuItem {
+        Continue = 0,
+        NewGame = 1,
+        QuitGame = 2
+    };
+
+    bool is_enabled_(MenuItem item) const {
+        return item != MenuItem::Continue || continue_available_;
+    }
+    void move_selection_(int delta) {
+        int next = static_cast<int>(selected_item_);
+        for (int i = 0; i < 3; ++i) {
+            next += delta;
+            if (next < 0) next = 2;
+            if (next > 2) next = 0;
+            const auto item = static_cast<MenuItem>(next);
+            if (is_enabled_(item)) {
+                selected_item_ = item;
+                return;
+            }
+        }
+    }
+    void decide_() {
+        if (selected_item_ == MenuItem::Continue) {
+            if (!continue_available_) return;
+            if (blackboard) blackboard->setf("selected_stage", static_cast<float>(continue_stage_()));
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", "stage_select_scene"));
+            return;
+        }
+        if (selected_item_ == MenuItem::NewGame) {
+            if (save_service) save_service->remove(kStageProgressSlot);
+            if (blackboard) blackboard->setf("selected_stage", 1.0f);
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", "stage_select_scene"));
+            return;
+        }
+        if (selected_item_ == MenuItem::QuitGame) {
+            const std::string to = blackboard ? blackboard->root_name : std::string("game");
+            send_mail(NeneMail(to, this->name, "quit", ""));
+        }
+    }
+    int continue_stage_() const {
+        bool cleared[kStageCount]{};
+        if (save_service && save_service->slot_exists(kStageProgressSlot)) {
+            try {
+                const NeneSaveDocument doc = save_service->load(kStageProgressSlot);
+                const auto* record = doc.find_node(kStageProgressNode);
+                if (record) {
+                    NeneSaveReader reader(*record);
+                    for (int i = 0; i < kStageCount; ++i) {
+                        cleared[i] = reader.get_bool(stage_clear_key(i + 1), false);
+                    }
+                }
+            } catch (const std::exception& e) {
+                nnerr(std::string("failed to load stage progress: ") + e.what());
+            }
+        }
+        for (int stage = 1; stage <= kStageCount; ++stage) {
+            if (!cleared[stage - 1]) return stage;
+        }
+        return kStageCount;
+    }
+    void render_menu_item_(SDL_Renderer* r, MenuItem item, SDL_Texture* text, float x, float y) const {
+        float text_w = 0.0f, text_h = 0.0f;
+        if (text) SDL_GetTextureSize(text, &text_w, &text_h);
+        if (selected_item_ == item) {
+            const float pointer_y = y + text_h * 0.5f;
+            draw_filled_circle_(r, x - 28.0f, pointer_y, 10.0f, SDL_FColor{0.28f, 0.55f, 0.70f, 1.0f});
+            draw_circle_outline_(r, x - 28.0f, pointer_y, 10.0f, SDL_Color{75, 150, 205, 255});
+        }
+        render_texture_left_(r, text, x, y);
+    }
+    void render_controls_(SDL_Renderer* r, float ww, float wh, float unit) const {
+        const float key = unit * 0.0665f;
+        const float y = wh - key - unit * 0.017f;
+        const float label_y = y + key * 0.5f;
+        const float gap = unit * 0.017f;
+
+        const float select_x = ww * 0.282f;
+        render_texture_scaled_(r, key_up_tex_, select_x, y, key, key);
+        render_texture_scaled_(r, key_down_tex_, select_x + key + gap, y, key, key);
+        render_texture_left_center_(r, select_tex_, select_x + (key + gap) * 2.0f + unit * 0.032f, label_y);
+
+        const float confirm_x = ww * 0.516f;
+        render_texture_scaled_(r, key_space_tex_, confirm_x, y, key, key);
+        render_texture_left_center_(r, confirm_tex_, confirm_x + key + unit * 0.042f, label_y);
+    }
+    static void draw_filled_circle_(SDL_Renderer* r, float cx, float cy, float radius, SDL_FColor color) {
+        constexpr int kSegments = 36;
+        std::vector<SDL_Vertex> vertices;
+        std::vector<int> indices;
+        vertices.reserve(kSegments + 1);
+        indices.reserve(kSegments * 3);
+        vertices.push_back(SDL_Vertex{ SDL_FPoint{cx, cy}, color, SDL_FPoint{0.0f, 0.0f} });
+        constexpr float kTwoPi = 6.2831853071795864769f;
+        for (int i = 0; i < kSegments; ++i) {
+            const float a = (static_cast<float>(i) / static_cast<float>(kSegments)) * kTwoPi;
+            vertices.push_back(SDL_Vertex{
+                SDL_FPoint{cx + std::cos(a) * radius, cy + std::sin(a) * radius},
+                color,
+                SDL_FPoint{0.0f, 0.0f}
+            });
+        }
+        for (int i = 1; i <= kSegments; ++i) {
+            indices.push_back(0);
+            indices.push_back(i);
+            indices.push_back((i == kSegments) ? 1 : i + 1);
+        }
+        SDL_RenderGeometry(r, nullptr, vertices.data(), static_cast<int>(vertices.size()),
+                           indices.data(), static_cast<int>(indices.size()));
+    }
+    static void draw_circle_outline_(SDL_Renderer* r, float cx, float cy, float radius, SDL_Color color) {
+        constexpr int kSegments = 48;
+        SDL_SetRenderDrawColor(r, color.r, color.g, color.b, color.a);
+        constexpr float kTwoPi = 6.2831853071795864769f;
+        float px = cx + radius;
+        float py = cy;
+        for (int i = 1; i <= kSegments; ++i) {
+            const float a = (static_cast<float>(i) / static_cast<float>(kSegments)) * kTwoPi;
+            const float x = cx + std::cos(a) * radius;
+            const float y = cy + std::sin(a) * radius;
+            SDL_RenderLine(r, px, py, x, y);
+            px = x;
+            py = y;
+        }
+    }
+    static void render_texture_left_(SDL_Renderer* r, SDL_Texture* tex, float x, float y) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ x, y, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_left_center_(SDL_Renderer* r, SDL_Texture* tex, float left, float cy) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ left, cy - th * 0.5f, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_scaled_(SDL_Renderer* r, SDL_Texture* tex, float x, float y, float w, float h) {
+        if (!tex) return;
+        SDL_FRect dst{ x, y, w, h };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_scaled_centered_(SDL_Renderer* r, SDL_Texture* tex, float cx, float cy, float w, float h) {
+        if (!tex) return;
+        SDL_FRect dst{ cx - w * 0.5f, cy - h * 0.5f, w, h };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
     SDL_Texture* sprite_tex_ = nullptr;
     SDL_Texture* title_tex_  = nullptr;
-    SDL_Texture* press_tex_  = nullptr;
+    SDL_Texture* lock_tex_ = nullptr;
+    SDL_Texture* continue_tex_ = nullptr;
+    SDL_Texture* continue_disabled_tex_ = nullptr;
+    SDL_Texture* new_game_tex_ = nullptr;
+    SDL_Texture* quit_game_tex_ = nullptr;
+    SDL_Texture* select_tex_ = nullptr;
+    SDL_Texture* confirm_tex_ = nullptr;
+    SDL_Texture* key_up_tex_ = nullptr;
+    SDL_Texture* key_down_tex_ = nullptr;
+    SDL_Texture* key_space_tex_ = nullptr;
     std::string font_path_;
-    float blink_accum_ = 0.0f;
-    bool  press_visible_ = true;
+    MenuItem selected_item_ = MenuItem::NewGame;
+    bool continue_available_ = false;
+};
+
+// ステージ選択シーン
+class StageSelectScene final : public NeneNode {
+public:
+    explicit StageSelectScene(std::string name) : NeneNode(std::move(name)) {}
+protected:
+    void init_node() override {
+        if (!asset_loader || !font_loader || !path_service || !blackboard) {
+            nnthrow("services not ready (asset_loader/font_loader/path_service/blackboard)");
+        }
+        font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
+        sprite_tex_ = asset_loader->get_texture(path_service->resolve("assets/sprites/sprite.png"));
+        lock_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/GoogleFontsIcons/lock_40dp_FFFFFF_FILL0_wght400_GRAD0_opsz40.png"));
+        check_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/GoogleFontsIcons/check_40dp_FFFFFF_FILL0_wght400_GRAD0_opsz40.png"));
+        key_left_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_left.png"));
+        key_right_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_right.png"));
+        key_space_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_space_icon.png"));
+        key_escape_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_escape.png"));
+
+        title_tex_ = font_loader->get_text_texture(font_path_, 40, "Stage Select", SDL_Color{255,255,255,255});
+        select_tex_ = font_loader->get_text_texture(font_path_, 24, "Select", SDL_Color{255,255,255,255});
+        confirm_tex_ = font_loader->get_text_texture(font_path_, 24, "Confirm", SDL_Color{255,255,255,255});
+        return_tex_ = font_loader->get_text_texture(font_path_, 24, "Return to Title", SDL_Color{255,255,255,255});
+        for (int i = 0; i < kStageCount; ++i) {
+            stage_num_tex_[i] = font_loader->get_text_texture(
+                font_path_, 44, std::to_string(i + 1), SDL_Color{255,255,255,255});
+        }
+        load_progress_();
+        selected_stage_ = static_cast<int>(blackboard->getf("selected_stage", 1.0f));
+        if (selected_stage_ < 1 || selected_stage_ > kStageCount) selected_stage_ = 1;
+        if (!is_stage_unlocked_(selected_stage_)) selected_stage_ = first_unlocked_stage_();
+        blackboard->setf("selected_stage", static_cast<float>(selected_stage_));
+    }
+    void render(SDL_Renderer* r) override {
+        if (!r) return;
+        int w = 0, h = 0;
+        if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
+
+        const float ww = static_cast<float>(w);
+        const float wh = static_cast<float>(h);
+        const float unit = std::min(ww, wh);
+        const float title_y = wh * 0.112f;
+        const float line_y = wh * 0.542f;
+        const float node_radius = unit * 0.0265f;
+        const float node_xs[kStageCount] = { ww * 0.247f, ww * 0.502f, ww * 0.769f };
+
+        render_texture_centered_(r, title_tex_, ww * 0.5f, title_y);
+
+        SDL_SetRenderDrawColor(r, 220, 220, 220, 255);
+        SDL_RenderLine(r, node_xs[0], line_y, node_xs[kStageCount - 1], line_y);
+
+        for (int i = 0; i < kStageCount; ++i) {
+            const int stage = i + 1;
+            draw_filled_circle_(r, node_xs[i], line_y, node_radius, SDL_FColor{0.97f, 0.97f, 0.95f, 1.0f});
+
+            const float number_y = line_y + unit * 0.092f;
+            render_texture_centered_(r, stage_num_tex_[i], node_xs[i], number_y);
+            if (cleared_[i]) {
+                const float check_size = unit * 0.038f;
+                render_texture_scaled_centered_(r, check_tex_, node_xs[i] + unit * 0.052f, number_y + 1.0f,
+                                                check_size, check_size);
+            }
+            if (!is_stage_unlocked_(stage)) {
+                const float lock_size = unit * 0.047f;
+                render_texture_scaled_centered_(r, lock_tex_, node_xs[i],
+                                                line_y - node_radius - lock_size * 0.95f,
+                                                lock_size, lock_size);
+            }
+        }
+
+        render_selected_dino_(r, node_xs[selected_stage_ - 1], line_y, node_radius, unit);
+        render_controls_(r, ww, wh, unit);
+    }
+    void handle_sdl_event(const SDL_Event& ev) override {
+        if (ev.type != SDL_EVENT_KEY_DOWN) return;
+        if (ev.key.repeat) return;
+        if (ev.key.key == SDLK_LEFT) {
+            move_selection_(-1);
+            return;
+        }
+        if (ev.key.key == SDLK_RIGHT) {
+            move_selection_(1);
+            return;
+        }
+        if (ev.key.key == SDLK_SPACE) {
+            if (!is_stage_unlocked_(selected_stage_)) return;
+            if (blackboard) blackboard->setf("selected_stage", static_cast<float>(selected_stage_));
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", "play_scene"));
+            return;
+        }
+        if (ev.key.key == SDLK_ESCAPE) {
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", "title_scene"));
+        }
+    }
+private:
+    bool is_stage_unlocked_(int stage) const {
+        if (stage <= 1) return true;
+        if (stage > kStageCount) return false;
+        return cleared_[stage - 2];
+    }
+    int first_unlocked_stage_() const {
+        for (int stage = 1; stage <= kStageCount; ++stage) {
+            if (is_stage_unlocked_(stage)) return stage;
+        }
+        return 1;
+    }
+    void move_selection_(int delta) {
+        int next = selected_stage_;
+        for (int i = 0; i < kStageCount; ++i) {
+            next += delta;
+            if (next < 1) next = kStageCount;
+            if (next > kStageCount) next = 1;
+            if (is_stage_unlocked_(next)) {
+                selected_stage_ = next;
+                if (blackboard) blackboard->setf("selected_stage", static_cast<float>(selected_stage_));
+                return;
+            }
+        }
+    }
+    void load_progress_() {
+        for (int i = 0; i < kStageCount; ++i) cleared_[i] = false;
+        if (!save_service) return;
+        try {
+            if (!save_service->slot_exists(kStageProgressSlot)) return;
+            const NeneSaveDocument doc = save_service->load(kStageProgressSlot);
+            const auto* record = doc.find_node(kStageProgressNode);
+            if (!record) return;
+            NeneSaveReader reader(*record);
+            for (int i = 0; i < kStageCount; ++i) {
+                cleared_[i] = reader.get_bool(stage_clear_key(i + 1), false);
+            }
+        } catch (const std::exception& e) {
+            nnerr(std::string("failed to load stage progress: ") + e.what());
+        }
+    }
+    void render_selected_dino_(SDL_Renderer* r, float cx, float line_y, float node_radius, float unit) const {
+        if (!sprite_tex_) return;
+        const SDL_FRect dino_src{ 1514.2f, 0.0f, 88.0f, 96.0f };
+        const float dh = unit * 0.111f;
+        const float dw = dh * (88.0f / 96.0f);
+        const float bottom = line_y - node_radius - unit * 0.025f;
+        SDL_FRect dst{ cx - dw * 0.5f, bottom - dh, dw, dh };
+        SDL_RenderTexture(r, sprite_tex_, &dino_src, &dst);
+    }
+    void render_controls_(SDL_Renderer* r, float ww, float wh, float unit) const {
+        const float key = unit * 0.0665f;
+        const float y = wh - key - unit * 0.015f;
+        const float label_y = y + key * 0.5f;
+        const float gap = unit * 0.017f;
+
+        const float select_x = ww * 0.243f;
+        render_texture_scaled_(r, key_left_tex_, select_x, y, key, key);
+        render_texture_scaled_(r, key_right_tex_, select_x + key + gap, y, key, key);
+        render_texture_left_center_(r, select_tex_, select_x + (key + gap) * 2.0f + unit * 0.012f, label_y);
+
+        const float confirm_x = ww * 0.467f;
+        render_texture_scaled_(r, key_space_tex_, confirm_x, y, key, key);
+        render_texture_left_center_(r, confirm_tex_, confirm_x + key + unit * 0.040f, label_y);
+
+        const float return_x = ww * 0.671f;
+        render_texture_scaled_(r, key_escape_tex_, return_x, y, key, key);
+        render_texture_left_center_(r, return_tex_, return_x + key + unit * 0.040f, label_y);
+    }
+    static void draw_filled_circle_(SDL_Renderer* r, float cx, float cy, float radius, SDL_FColor color) {
+        constexpr int kSegments = 48;
+        std::vector<SDL_Vertex> vertices;
+        std::vector<int> indices;
+        vertices.reserve(kSegments + 1);
+        indices.reserve(kSegments * 3);
+        vertices.push_back(SDL_Vertex{ SDL_FPoint{cx, cy}, color, SDL_FPoint{0.0f, 0.0f} });
+        constexpr float kTwoPi = 6.2831853071795864769f;
+        for (int i = 0; i < kSegments; ++i) {
+            const float a = (static_cast<float>(i) / static_cast<float>(kSegments)) * kTwoPi;
+            vertices.push_back(SDL_Vertex{
+                SDL_FPoint{cx + std::cos(a) * radius, cy + std::sin(a) * radius},
+                color,
+                SDL_FPoint{0.0f, 0.0f}
+            });
+        }
+        for (int i = 1; i <= kSegments; ++i) {
+            indices.push_back(0);
+            indices.push_back(i);
+            indices.push_back((i == kSegments) ? 1 : i + 1);
+        }
+        SDL_RenderGeometry(r, nullptr, vertices.data(), static_cast<int>(vertices.size()),
+                           indices.data(), static_cast<int>(indices.size()));
+    }
+    static void draw_circle_outline_(SDL_Renderer* r, float cx, float cy, float radius, SDL_Color color) {
+        constexpr int kSegments = 64;
+        SDL_SetRenderDrawColor(r, color.r, color.g, color.b, color.a);
+        constexpr float kTwoPi = 6.2831853071795864769f;
+        for (int pass = 0; pass < 2; ++pass) {
+            const float rr = radius - static_cast<float>(pass);
+            float px = cx + rr;
+            float py = cy;
+            for (int i = 1; i <= kSegments; ++i) {
+                const float a = (static_cast<float>(i) / static_cast<float>(kSegments)) * kTwoPi;
+                const float x = cx + std::cos(a) * rr;
+                const float y = cy + std::sin(a) * rr;
+                SDL_RenderLine(r, px, py, x, y);
+                px = x;
+                py = y;
+            }
+        }
+    }
+    static void render_texture_centered_(SDL_Renderer* r, SDL_Texture* tex, float cx, float cy) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ cx - tw * 0.5f, cy - th * 0.5f, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_left_center_(SDL_Renderer* r, SDL_Texture* tex, float left, float cy) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ left, cy - th * 0.5f, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_scaled_(SDL_Renderer* r, SDL_Texture* tex, float x, float y, float w, float h) {
+        if (!tex) return;
+        SDL_FRect dst{ x, y, w, h };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_scaled_centered_(SDL_Renderer* r, SDL_Texture* tex, float cx, float cy, float w, float h) {
+        if (!tex) return;
+        SDL_FRect dst{ cx - w * 0.5f, cy - h * 0.5f, w, h };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+
+    std::string font_path_;
+    SDL_Texture* sprite_tex_ = nullptr;
+    SDL_Texture* title_tex_ = nullptr;
+    SDL_Texture* select_tex_ = nullptr;
+    SDL_Texture* confirm_tex_ = nullptr;
+    SDL_Texture* return_tex_ = nullptr;
+    SDL_Texture* lock_tex_ = nullptr;
+    SDL_Texture* check_tex_ = nullptr;
+    SDL_Texture* key_left_tex_ = nullptr;
+    SDL_Texture* key_right_tex_ = nullptr;
+    SDL_Texture* key_space_tex_ = nullptr;
+    SDL_Texture* key_escape_tex_ = nullptr;
+    SDL_Texture* stage_num_tex_[kStageCount]{};
+    bool cleared_[kStageCount]{};
+    int selected_stage_ = 1;
 };
 
 // シーンスイッチ
@@ -711,6 +1200,9 @@ protected:
     void init_node() override {
         register_node("title_scene", [] {
             return std::make_unique<TitleScene>("title_scene");
+        });
+        register_node("stage_select_scene", [] {
+            return std::make_unique<StageSelectScene>("stage_select_scene");
         });
         register_node("play_scene", [] {
             return std::make_unique<PlayScene>("play_scene");
@@ -732,7 +1224,9 @@ public:
         100, 100,
         icon_path().c_str()
       )
-    {}
+    {
+        configure_save_service("NeneEngineDemo", "SuperChromeDino");
+    }
 protected:
     void init_node() override {
         // シーンスイッチを生成.

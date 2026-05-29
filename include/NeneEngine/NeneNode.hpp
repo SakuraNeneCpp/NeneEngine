@@ -35,6 +35,10 @@ public:
         mark_render_dirty();
     }
     int  get_render_z() const { return render_z; }
+    void set_save_service(std::shared_ptr<NeneSaveService> service);
+    std::shared_ptr<NeneSaveService> get_save_service() const { return save_service; }
+    void save_subtree(NeneSaveDocument& doc, std::string_view path = "") const;
+    void load_subtree(const NeneSaveDocument& doc, std::string_view path = "");
 protected:
     void show_tree(std::ostream& os = std::cout) const;
     // イベントパルス
@@ -57,6 +61,7 @@ protected:
     std::shared_ptr<NeneImageLoader> asset_loader;
     std::shared_ptr<NeneFontLoader> font_loader;
     std::shared_ptr<PathService> path_service;
+    std::shared_ptr<NeneSaveService> save_service;
     std::shared_ptr<NeneBlackboard> blackboard;
     std::shared_ptr<NeneCollisionWorld> collision_world;
     // 親ノード
@@ -71,6 +76,9 @@ protected:
     virtual void handle_time_lapse(const float&) {}
     virtual void handle_nene_mail(const NeneMail&) {}
     virtual void render(SDL_Renderer*) {}
+    virtual std::string save_type() const { return ""; }
+    virtual void save_state(NeneSaveWriter&) const {}
+    virtual void load_state(const NeneSaveReader&) {}
     // dirty伝播
     void mark_render_dirty() {
         render_cache_dirty_ = true;
@@ -111,6 +119,11 @@ public:
     explicit NeneRoot(std::string, const char*, int, int, Uint32, int, int, const char*); // →.cpp
     ~NeneRoot();
     int run(); // →.cpp
+    void configure_save_service(std::string org, std::string app,
+                                std::string save_dir = "saves",
+                                std::string extension = ".nnsave");
+    void save_tree_to_slot(std::string_view slot_name) const;
+    void load_tree_from_slot(std::string_view slot_name);
 private:
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
