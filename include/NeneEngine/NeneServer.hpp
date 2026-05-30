@@ -18,6 +18,10 @@
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+struct MIX_Mixer;
+struct MIX_Audio;
+struct MIX_Track;
+
 // NeneColorPolygon
 // 凸多角形ヒットボックス
 enum class NenePolygonColor : std::uint8_t {
@@ -777,4 +781,42 @@ private:
     SDL_Renderer* renderer_;
     std::unordered_map<std::string, TTF_Font*> fontCache_;
     std::unordered_map<FontKey, SDL_Texture*, FontKeyHash> textCache_;
+};
+
+
+// NeneSoundLoader
+class NeneSoundLoader {
+public:
+    explicit NeneSoundLoader(int se_track_count = 16);
+    ~NeneSoundLoader();
+    NeneSoundLoader(const NeneSoundLoader&) = delete;
+    NeneSoundLoader& operator=(const NeneSoundLoader&) = delete;
+    void preload(const std::string& path);
+    void play_se(const std::string& path, float gain = 1.0f);
+    void play_bgm(const std::string& path, float gain = 1.0f);
+    void stop_bgm();
+    void set_se_volume(float volume);
+    void set_bgm_volume(float volume);
+    float se_volume() const { return se_volume_; }
+    float bgm_volume() const { return bgm_volume_; }
+private:
+    MIX_Audio* get_audio_(const std::string& path);
+    MIX_Audio* load_audio_(const std::string& path);
+    MIX_Track* acquire_se_track_();
+    static float clamp_gain_(float gain);
+    MIX_Mixer* mixer_ = nullptr;
+    std::unordered_map<std::string, MIX_Audio*> cache_;
+    std::vector<MIX_Track*> se_tracks_;
+    std::vector<float> se_track_gains_;
+    std::size_t next_se_track_ = 0;
+    MIX_Track* bgm_track_ = nullptr;
+    std::string bgm_path_;
+    float se_volume_ = 1.0f;
+    float bgm_volume_ = 1.0f;
+    float bgm_gain_ = 1.0f;
+    bool mixer_initialized_ = false;
+#ifdef _WIN32
+    bool media_foundation_started_ = false;
+    bool com_initialized_ = false;
+#endif
 };

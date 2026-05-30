@@ -1,12 +1,28 @@
 #include <SDL3/SDL.h>
+#include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <NeneEngine/NeneServer.hpp>
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <SDL3/SDL_filesystem.h>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#include <wrl/client.h>
+#endif
 
 namespace {
 std::string nene_save_escape_(std::string_view s) {
@@ -121,6 +137,142 @@ bool nene_blackboard_valid_control_(int value) {
     }
     return false;
 }
+
+bool nene_sound_has_extension_(std::string_view path, std::string_view extension) {
+    if (path.size() < extension.size()) return false;
+    const std::string_view tail = path.substr(path.size() - extension.size());
+    for (std::size_t i = 0; i < tail.size(); ++i) {
+        const auto a = static_cast<unsigned char>(tail[i]);
+        const auto b = static_cast<unsigned char>(extension[i]);
+        if (std::tolower(a) != std::tolower(b)) return false;
+    }
+    return true;
+}
+
+#ifdef _WIN32
+struct NeneDecodedPcm_ {
+    SDL_AudioSpec spec{};
+    std::vector<std::uint8_t> data;
+};
+
+std::string nene_sound_hresult_(HRESULT hr) {
+    std::ostringstream os;
+    os << "0x" << std::hex << std::uppercase << static_cast<unsigned long>(hr);
+    return os.str();
+}
+
+void nene_sound_check_hr_(HRESULT hr, std::string_view where) {
+    if (SUCCEEDED(hr)) return;
+    throw std::runtime_error(std::string(where) + " failed: " + nene_sound_hresult_(hr));
+}
+
+std::wstring nene_sound_utf8_to_wide_(const std::string& text) {
+    if (text.empty()) return {};
+    int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                     text.c_str(), -1, nullptr, 0);
+    if (needed <= 0) {
+        needed = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    }
+    if (needed <= 0) {
+        throw std::runtime_error("failed to convert UTF-8 path to UTF-16");
+    }
+    std::wstring out(static_cast<std::size_t>(needed), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, out.data(), needed);
+    out.resize(static_cast<std::size_t>(needed - 1));
+    return out;
+}
+
+NeneDecodedPcm_ nene_sound_decode_media_foundation_(const std::string& path) {
+    using Microsoft::WRL::ComPtr;
+
+    const std::wstring wide_path = nene_sound_utf8_to_wide_(path);
+    ComPtr<IMFSourceReader> reader;
+    nene_sound_check_hr_(
+        MFCreateSourceReaderFromURL(wide_path.c_str(), nullptr, reader.GetAddressOf()),
+        "MFCreateSourceReaderFromURL");
+
+    nene_sound_check_hr_(
+        reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE),
+        "IMFSourceReader::SetStreamSelection(all)");
+    nene_sound_check_hr_(
+        reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE),
+        "IMFSourceReader::SetStreamSelection(audio)");
+
+    ComPtr<IMFMediaType> output_type;
+    nene_sound_check_hr_(MFCreateMediaType(output_type.GetAddressOf()), "MFCreateMediaType");
+    nene_sound_check_hr_(
+        output_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio),
+        "IMFMediaType::SetGUID(MF_MT_MAJOR_TYPE)");
+    nene_sound_check_hr_(
+        output_type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM),
+        "IMFMediaType::SetGUID(MF_MT_SUBTYPE)");
+    nene_sound_check_hr_(
+        output_type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16),
+        "IMFMediaType::SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE)");
+    nene_sound_check_hr_(
+        reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, output_type.Get()),
+        "IMFSourceReader::SetCurrentMediaType");
+
+    ComPtr<IMFMediaType> actual_type;
+    nene_sound_check_hr_(
+        reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, actual_type.GetAddressOf()),
+        "IMFSourceReader::GetCurrentMediaType");
+
+    UINT32 channels = 0;
+    UINT32 frequency = 0;
+    UINT32 bits_per_sample = 16;
+    nene_sound_check_hr_(
+        actual_type->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels),
+        "IMFMediaType::GetUINT32(MF_MT_AUDIO_NUM_CHANNELS)");
+    nene_sound_check_hr_(
+        actual_type->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &frequency),
+        "IMFMediaType::GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND)");
+    actual_type->GetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, &bits_per_sample);
+    if (channels == 0 || frequency == 0 || bits_per_sample != 16) {
+        throw std::runtime_error("Media Foundation returned an unsupported PCM format");
+    }
+
+    NeneDecodedPcm_ decoded;
+    decoded.spec.format = SDL_AUDIO_S16;
+    decoded.spec.channels = static_cast<int>(channels);
+    decoded.spec.freq = static_cast<int>(frequency);
+
+    for (;;) {
+        DWORD stream_index = 0;
+        DWORD flags = 0;
+        LONGLONG timestamp = 0;
+        ComPtr<IMFSample> sample;
+        nene_sound_check_hr_(
+            reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0,
+                               &stream_index, &flags, &timestamp, sample.GetAddressOf()),
+            "IMFSourceReader::ReadSample");
+        if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) break;
+        if (!sample) continue;
+
+        ComPtr<IMFMediaBuffer> buffer;
+        nene_sound_check_hr_(
+            sample->ConvertToContiguousBuffer(buffer.GetAddressOf()),
+            "IMFSample::ConvertToContiguousBuffer");
+
+        BYTE* audio_data = nullptr;
+        DWORD max_length = 0;
+        DWORD current_length = 0;
+        nene_sound_check_hr_(
+            buffer->Lock(&audio_data, &max_length, &current_length),
+            "IMFMediaBuffer::Lock");
+        if (audio_data && current_length > 0) {
+            const auto* begin = reinterpret_cast<const std::uint8_t*>(audio_data);
+            decoded.data.insert(decoded.data.end(), begin, begin + current_length);
+        }
+        buffer->Unlock();
+    }
+
+    if (decoded.data.empty()) {
+        throw std::runtime_error("Media Foundation decoded no audio data");
+    }
+    return decoded;
+}
+#endif
 }
 
 // NeneSaveWriter
@@ -637,4 +789,261 @@ SDL_Texture* NeneFontLoader::get_text_texture(const std::string& fontPath, int f
 
     textCache_[fk] = tex;
     return tex;
+}
+
+NeneSoundLoader::NeneSoundLoader(int se_track_count) {
+    auto cleanup = [this]() {
+        for (auto* track : se_tracks_) {
+            if (track) MIX_DestroyTrack(track);
+        }
+        se_tracks_.clear();
+        se_track_gains_.clear();
+        if (bgm_track_) {
+            MIX_DestroyTrack(bgm_track_);
+            bgm_track_ = nullptr;
+        }
+        for (auto& [path, audio] : cache_) {
+            if (audio) MIX_DestroyAudio(audio);
+        }
+        cache_.clear();
+        if (mixer_) {
+            MIX_DestroyMixer(mixer_);
+            mixer_ = nullptr;
+        }
+        if (mixer_initialized_) {
+            MIX_Quit();
+            mixer_initialized_ = false;
+        }
+#ifdef _WIN32
+        if (media_foundation_started_) {
+            MFShutdown();
+            media_foundation_started_ = false;
+        }
+        if (com_initialized_) {
+            CoUninitialize();
+            com_initialized_ = false;
+        }
+#endif
+    };
+
+    try {
+#ifdef _WIN32
+        const HRESULT co_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(co_hr)) {
+            com_initialized_ = true;
+        } else if (co_hr != RPC_E_CHANGED_MODE) {
+            nene_sound_check_hr_(co_hr, "CoInitializeEx");
+        }
+        nene_sound_check_hr_(MFStartup(MF_VERSION), "MFStartup");
+        media_foundation_started_ = true;
+#endif
+
+        if (!MIX_Init()) {
+            throw std::runtime_error(std::string("MIX_Init failed: ") + SDL_GetError());
+        }
+        mixer_initialized_ = true;
+
+        mixer_ = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr);
+        if (!mixer_) {
+            throw std::runtime_error(std::string("MIX_CreateMixerDevice failed: ") + SDL_GetError());
+        }
+
+        const int count = std::max(1, se_track_count);
+        se_tracks_.reserve(static_cast<std::size_t>(count));
+        se_track_gains_.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            MIX_Track* track = MIX_CreateTrack(mixer_);
+            if (!track) {
+                throw std::runtime_error(std::string("MIX_CreateTrack(se) failed: ") + SDL_GetError());
+            }
+            MIX_TagTrack(track, "se");
+            se_tracks_.push_back(track);
+            se_track_gains_.push_back(1.0f);
+        }
+
+        bgm_track_ = MIX_CreateTrack(mixer_);
+        if (!bgm_track_) {
+            throw std::runtime_error(std::string("MIX_CreateTrack(bgm) failed: ") + SDL_GetError());
+        }
+        MIX_TagTrack(bgm_track_, "bgm");
+    } catch (...) {
+        cleanup();
+        throw;
+    }
+}
+
+NeneSoundLoader::~NeneSoundLoader() {
+    stop_bgm();
+    for (auto* track : se_tracks_) {
+        if (track) MIX_DestroyTrack(track);
+    }
+    se_tracks_.clear();
+    se_track_gains_.clear();
+
+    if (bgm_track_) {
+        MIX_DestroyTrack(bgm_track_);
+        bgm_track_ = nullptr;
+    }
+
+    for (auto& [path, audio] : cache_) {
+        if (audio) MIX_DestroyAudio(audio);
+    }
+    cache_.clear();
+
+    if (mixer_) {
+        MIX_DestroyMixer(mixer_);
+        mixer_ = nullptr;
+    }
+    if (mixer_initialized_) {
+        MIX_Quit();
+        mixer_initialized_ = false;
+    }
+#ifdef _WIN32
+    if (media_foundation_started_) {
+        MFShutdown();
+        media_foundation_started_ = false;
+    }
+    if (com_initialized_) {
+        CoUninitialize();
+        com_initialized_ = false;
+    }
+#endif
+}
+
+void NeneSoundLoader::preload(const std::string& path) {
+    (void)get_audio_(path);
+}
+
+void NeneSoundLoader::play_se(const std::string& path, float gain) {
+    const float base_gain = clamp_gain_(gain);
+    const float effective_gain = se_volume_ * base_gain;
+    if (effective_gain <= 0.0f) return;
+
+    MIX_Audio* audio = get_audio_(path);
+    MIX_Track* track = acquire_se_track_();
+    if (!MIX_SetTrackAudio(track, audio)) {
+        throw std::runtime_error(std::string("MIX_SetTrackAudio(se) failed: ") + SDL_GetError());
+    }
+
+    for (std::size_t i = 0; i < se_tracks_.size(); ++i) {
+        if (se_tracks_[i] == track) {
+            se_track_gains_[i] = base_gain;
+            break;
+        }
+    }
+
+    MIX_SetTrackGain(track, effective_gain);
+    if (!MIX_PlayTrack(track, 0)) {
+        throw std::runtime_error(std::string("MIX_PlayTrack(se) failed: ") + SDL_GetError());
+    }
+}
+
+void NeneSoundLoader::play_bgm(const std::string& path, float gain) {
+    if (!bgm_track_) return;
+    bgm_gain_ = clamp_gain_(gain);
+
+    if (bgm_path_ == path && MIX_TrackPlaying(bgm_track_)) {
+        MIX_SetTrackGain(bgm_track_, bgm_volume_ * bgm_gain_);
+        return;
+    }
+
+    MIX_Audio* audio = get_audio_(path);
+    MIX_StopTrack(bgm_track_, 0);
+    if (!MIX_SetTrackAudio(bgm_track_, audio)) {
+        throw std::runtime_error(std::string("MIX_SetTrackAudio(bgm) failed: ") + SDL_GetError());
+    }
+    MIX_SetTrackGain(bgm_track_, bgm_volume_ * bgm_gain_);
+
+    SDL_PropertiesID props = SDL_CreateProperties();
+    if (!props) {
+        throw std::runtime_error(std::string("SDL_CreateProperties failed: ") + SDL_GetError());
+    }
+    SDL_SetNumberProperty(props, MIX_PROP_PLAY_LOOPS_NUMBER, -1);
+    const bool ok = MIX_PlayTrack(bgm_track_, props);
+    SDL_DestroyProperties(props);
+    if (!ok) {
+        throw std::runtime_error(std::string("MIX_PlayTrack(bgm) failed: ") + SDL_GetError());
+    }
+    bgm_path_ = path;
+}
+
+void NeneSoundLoader::stop_bgm() {
+    if (!bgm_track_) return;
+    MIX_StopTrack(bgm_track_, 0);
+    MIX_SetTrackAudio(bgm_track_, nullptr);
+    bgm_path_.clear();
+}
+
+void NeneSoundLoader::set_se_volume(float volume) {
+    se_volume_ = clamp_gain_(volume);
+    for (std::size_t i = 0; i < se_tracks_.size(); ++i) {
+        if (se_tracks_[i]) {
+            MIX_SetTrackGain(se_tracks_[i], se_volume_ * se_track_gains_[i]);
+        }
+    }
+}
+
+void NeneSoundLoader::set_bgm_volume(float volume) {
+    bgm_volume_ = clamp_gain_(volume);
+    if (bgm_track_) {
+        MIX_SetTrackGain(bgm_track_, bgm_volume_ * bgm_gain_);
+    }
+}
+
+MIX_Audio* NeneSoundLoader::get_audio_(const std::string& path) {
+    auto it = cache_.find(path);
+    if (it != cache_.end()) return it->second;
+    MIX_Audio* audio = load_audio_(path);
+    cache_.emplace(path, audio);
+    return audio;
+}
+
+MIX_Audio* NeneSoundLoader::load_audio_(const std::string& path) {
+    if (!mixer_) {
+        throw std::runtime_error("NeneSoundLoader: mixer is not initialized");
+    }
+
+    if (MIX_Audio* audio = MIX_LoadAudio(mixer_, path.c_str(), false)) {
+        return audio;
+    }
+
+    const std::string mixer_error = SDL_GetError();
+#ifdef _WIN32
+    if (nene_sound_has_extension_(path, ".mp3")) {
+        try {
+            const NeneDecodedPcm_ decoded = nene_sound_decode_media_foundation_(path);
+            MIX_Audio* audio = MIX_LoadRawAudio(mixer_, decoded.data.data(),
+                                                decoded.data.size(), &decoded.spec);
+            if (!audio) {
+                throw std::runtime_error(std::string("MIX_LoadRawAudio failed: ") + SDL_GetError());
+            }
+            return audio;
+        } catch (const std::exception& e) {
+            throw std::runtime_error("NeneSoundLoader: failed to load '" + path
+                                     + "': " + mixer_error
+                                     + "; Media Foundation fallback: " + e.what());
+        }
+    }
+#endif
+
+    throw std::runtime_error("NeneSoundLoader: MIX_LoadAudio failed '" + path
+                             + "': " + mixer_error);
+}
+
+MIX_Track* NeneSoundLoader::acquire_se_track_() {
+    if (se_tracks_.empty()) {
+        throw std::runtime_error("NeneSoundLoader: no SE tracks available");
+    }
+    for (auto* track : se_tracks_) {
+        if (track && !MIX_TrackPlaying(track)) return track;
+    }
+    MIX_Track* track = se_tracks_[next_se_track_ % se_tracks_.size()];
+    next_se_track_ = (next_se_track_ + 1) % se_tracks_.size();
+    MIX_StopTrack(track, 0);
+    return track;
+}
+
+float NeneSoundLoader::clamp_gain_(float gain) {
+    if (!std::isfinite(gain)) return 0.0f;
+    return std::clamp(gain, 0.0f, 1.0f);
 }

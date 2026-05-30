@@ -60,6 +60,7 @@ protected:
     std::shared_ptr<NeneInputServer> input_server;
     std::shared_ptr<NeneImageLoader> asset_loader;
     std::shared_ptr<NeneFontLoader> font_loader;
+    std::shared_ptr<NeneSoundLoader> sound_loader;
     std::shared_ptr<PathService> path_service;
     std::shared_ptr<NeneSaveService> save_service;
     std::shared_ptr<NeneBlackboard> blackboard;

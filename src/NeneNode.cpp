@@ -239,6 +239,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     child->input_server = this->input_server;
     child->asset_loader = this->asset_loader;
     child->font_loader  = this->font_loader;
+    child->sound_loader = this->sound_loader;
     child->path_service = this->path_service;
     child->save_service = this->save_service;
     child->blackboard = this->blackboard;
@@ -286,7 +287,7 @@ void NeneNode::clear_children() {
 NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint32 flags, int x, int y, const char* icon_path)
     : NeneNode(std::move(node_name)) {
     // SDL 初期化
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { nnthrow("SDL_Init failed"); }
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) { nnthrow("SDL_Init failed"); }
     // ウィンドウ生成
     window = SDL_CreateWindow(title, w, h, flags);
     if (!window) { nnthrow("SDL_CreateWindow failed"); }
@@ -309,6 +310,7 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
     this->input_server    = std::make_shared<NeneInputServer>();
     this->asset_loader    = std::make_shared<NeneImageLoader>(renderer);
     this->font_loader     = std::make_shared<NeneFontLoader>(renderer);
+    this->sound_loader    = std::make_shared<NeneSoundLoader>();
     this->path_service    = std::make_shared<PathService>();
     this->blackboard = std::make_shared<NeneBlackboard>();
     if (this->blackboard) {
@@ -322,6 +324,8 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
 }
 
 NeneRoot::~NeneRoot() {
+    clear_children();
+    sound_loader.reset();
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     SDL_Quit();

@@ -23,6 +23,21 @@ static constexpr const char* kSettingSeVolume = "se_volume";
 static constexpr const char* kSettingBgmVolume = "bgm_volume";
 static constexpr const char* kSettingCursorVisible = "cursor_visible";
 static constexpr const char* kSettingDinoControl = "dino_control";
+static constexpr const char* kSeCursorMovePath =
+    "assets/se/soundeffect-lab/"
+    "\xE3\x82\xAB\xE3\x83\xBC\xE3\x82\xBD\xE3\x83\xAB\xE7\xA7\xBB\xE5\x8B\x95"
+    "1.mp3";
+static constexpr const char* kSeConfirmPath =
+    "assets/se/soundeffect-lab/"
+    "\xE6\xB1\xBA\xE5\xAE\x9A\xE3\x83\x9C\xE3\x82\xBF\xE3\x83\xB3"
+    "\xE3\x82\x92\xE6\x8A\xBC\xE3\x81\x99"
+    "1.mp3";
+static constexpr const char* kSeDinoJumpPath = "assets/se/fc_sitefactory/se_jump_001.wav";
+static constexpr const char* kStageBgmPaths[kStageCount] = {
+    "assets/bgm/maou/maou_bgm_8bit17.mp3",
+    "assets/bgm/maou/maou_bgm_8bit27.mp3",
+    "assets/bgm/maou/maou_14_shining_star.mp3",
+};
 static constexpr const char* kStageSceneNames[kStageCount] = {
     "stage_1_scene",
     "stage_2_scene",
@@ -41,6 +56,29 @@ static const char* stage_scene_name(int stage) {
 
 static std::string stage_clear_key(int stage) {
     return "stage_" + std::to_string(stage) + "_cleared";
+}
+
+static const char* stage_bgm_path(int stage) {
+    return kStageBgmPaths[clamp_stage(stage) - 1];
+}
+
+static float sound_volume_gain(const NeneBlackboard& blackboard, const char* key) {
+    const float value = blackboard.getf(key, 5.0f);
+    return std::clamp(value / 9.0f, 0.0f, 1.0f);
+}
+
+static void apply_sound_settings(NeneSoundLoader& sound_loader, const NeneBlackboard& blackboard) {
+    sound_loader.set_se_volume(sound_volume_gain(blackboard, kSettingSeVolume));
+    sound_loader.set_bgm_volume(sound_volume_gain(blackboard, kSettingBgmVolume));
+}
+
+static void play_sound_effect(const std::shared_ptr<NeneSoundLoader>& sound_loader,
+                              const std::shared_ptr<PathService>& path_service,
+                              const std::shared_ptr<NeneBlackboard>& blackboard,
+                              const char* rel_path) {
+    if (!sound_loader || !path_service) return;
+    if (blackboard) apply_sound_settings(*sound_loader, *blackboard);
+    sound_loader->play_se(path_service->resolve(rel_path));
 }
 
 static int dino_control_preset(const NeneBlackboard& blackboard) {
@@ -213,6 +251,7 @@ private:
         if (!on_ground_) return;
         on_ground_ = false;
         vy_ = -jump_speed_;
+        play_sound_effect(sound_loader, path_service, blackboard, kSeDinoJumpPath);
     }
     static Vertices rect_(float x, float y, float rw, float rh) {
         return Vertices{
@@ -893,6 +932,7 @@ protected:
         const char* next_scene = stage_clear
             ? "stage_select_scene"
             : stage_scene_name(static_cast<int>(blackboard->getf("selected_stage", 1.0f)));
+        play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
         send_mail(NeneMail("scene_switch", this->name, "switch_to", next_scene));
     }
 private:
@@ -920,6 +960,9 @@ class PlayScene final : public NeneNode {
 public:
     explicit PlayScene(std::string name, int stage)
         : NeneNode(std::move(name)), stage_(clamp_stage(stage)) {}
+    ~PlayScene() override {
+        if (sound_loader) sound_loader->stop_bgm();
+    }
 protected:
     void init_node() override {
         if (blackboard) {
@@ -934,6 +977,7 @@ protected:
         }
         if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
         else nnerr("no collision world");
+        start_stage_bgm_();
         add_child(std::make_unique<NeneInputInterpreter>("input", "play"));
         add_child(std::make_unique<World>("world"));
         add_child(std::make_unique<Overlay>("overlay"));
@@ -945,6 +989,11 @@ protected:
         save_stage_clear_();
     }
 private:
+    void start_stage_bgm_() {
+        if (!sound_loader || !path_service) return;
+        if (blackboard) apply_sound_settings(*sound_loader, *blackboard);
+        sound_loader->play_bgm(path_service->resolve(stage_bgm_path(stage_)));
+    }
     void save_stage_clear_() {
         if (!blackboard) return;
         if (!save_service) {
@@ -1081,6 +1130,7 @@ private:
         return item != MenuItem::Continue || continue_available_;
     }
     void move_selection_(int delta) {
+        const auto before = selected_item_;
         int next = static_cast<int>(selected_item_);
         for (int i = 0; i < 4; ++i) {
             next += delta;
@@ -1089,6 +1139,9 @@ private:
             const auto item = static_cast<MenuItem>(next);
             if (is_enabled_(item)) {
                 selected_item_ = item;
+                if (selected_item_ != before) {
+                    play_sound_effect(sound_loader, path_service, blackboard, kSeCursorMovePath);
+                }
                 return;
             }
         }
@@ -1096,21 +1149,25 @@ private:
     void decide_() {
         if (selected_item_ == MenuItem::Continue) {
             if (!continue_available_) return;
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             if (blackboard) blackboard->setf("selected_stage", static_cast<float>(continue_stage_()));
             send_mail(NeneMail("scene_switch", this->name, "switch_to", "stage_select_scene"));
             return;
         }
         if (selected_item_ == MenuItem::NewGame) {
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             if (save_service) save_service->remove(kStageProgressSlot);
             if (blackboard) blackboard->setf("selected_stage", 1.0f);
             send_mail(NeneMail("scene_switch", this->name, "switch_to", "stage_select_scene"));
             return;
         }
         if (selected_item_ == MenuItem::Settings) {
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             send_mail(NeneMail("scene_switch", this->name, "switch_to", "settings_scene"));
             return;
         }
         if (selected_item_ == MenuItem::QuitGame) {
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             const std::string to = blackboard ? blackboard->root_name : std::string("game");
             send_mail(NeneMail(to, this->name, "quit", ""));
         }
@@ -1253,6 +1310,7 @@ protected:
         }
         ensure_game_settings(*blackboard);
         apply_game_settings(*blackboard);
+        if (sound_loader) apply_sound_settings(*sound_loader, *blackboard);
 
         font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         key_up_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_up.png"));
@@ -1323,6 +1381,7 @@ protected:
             return;
         }
         if (ev.key.key == SDLK_ESCAPE) {
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             send_mail(NeneMail("scene_switch", this->name, "switch_to", "title_scene"));
         }
     }
@@ -1333,6 +1392,7 @@ private:
         selected_item_ += delta;
         if (selected_item_ < 0) selected_item_ = kItemCount - 1;
         if (selected_item_ >= kItemCount) selected_item_ = 0;
+        play_sound_effect(sound_loader, path_service, blackboard, kSeCursorMovePath);
     }
     void change_option_(int delta) {
         if (!blackboard) return;
@@ -1353,6 +1413,8 @@ private:
             blackboard->set_persistentf(kSettingDinoControl, static_cast<float>(next));
             apply_dino_control_setting(*blackboard);
         }
+        if (sound_loader) apply_sound_settings(*sound_loader, *blackboard);
+        play_sound_effect(sound_loader, path_service, blackboard, kSeCursorMovePath);
         autosave_settings_();
     }
     int volume_value_(const std::string& key) const {
@@ -1564,11 +1626,13 @@ protected:
         }
         if (ev.key.key == SDLK_SPACE) {
             if (!is_stage_unlocked_(selected_stage_)) return;
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             if (blackboard) blackboard->setf("selected_stage", static_cast<float>(selected_stage_));
             send_mail(NeneMail("scene_switch", this->name, "switch_to", stage_scene_name(selected_stage_)));
             return;
         }
         if (ev.key.key == SDLK_ESCAPE) {
+            play_sound_effect(sound_loader, path_service, blackboard, kSeConfirmPath);
             send_mail(NeneMail("scene_switch", this->name, "switch_to", "title_scene"));
         }
     }
@@ -1585,6 +1649,7 @@ private:
         return 1;
     }
     void move_selection_(int delta) {
+        const int before = selected_stage_;
         int next = selected_stage_;
         for (int i = 0; i < kStageCount; ++i) {
             next += delta;
@@ -1593,6 +1658,9 @@ private:
             if (is_stage_unlocked_(next)) {
                 selected_stage_ = next;
                 if (blackboard) blackboard->setf("selected_stage", static_cast<float>(selected_stage_));
+                if (selected_stage_ != before) {
+                    play_sound_effect(sound_loader, path_service, blackboard, kSeCursorMovePath);
+                }
                 return;
             }
         }
@@ -1768,7 +1836,10 @@ public:
     }
 protected:
     void init_node() override {
-        if (blackboard) apply_game_settings(*blackboard);
+        if (blackboard) {
+            apply_game_settings(*blackboard);
+            if (sound_loader) apply_sound_settings(*sound_loader, *blackboard);
+        }
         // シーンスイッチを生成.
         add_child(std::make_unique<SceneSwitch>("scene_switch"));
     }

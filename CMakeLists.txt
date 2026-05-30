@@ -19,6 +19,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(SDL3_image CONFIG REQUIRED)
 find_package(SDL3_ttf CONFIG REQUIRED)
+find_package(SDL3_mixer CONFIG REQUIRED)
 
 # Helper: pick a usable target name if the package provides multiple variants
 function(_pick_target outvar)
@@ -55,6 +56,12 @@ _pick_target(SDL3_TTF_LIB
   SDL3_ttf::SDL3_ttf-static
 )
 
+_pick_target(SDL3_MIXER_LIB
+  SDL3_mixer::SDL3_mixer
+  SDL3_mixer::SDL3_mixer-shared
+  SDL3_mixer::SDL3_mixer-static
+)
+
 # vcpkg's applocal.ps1 uses PowerShell to copy DLLs next to the executable.
 # If the WindowsApps pwsh.exe shim points to a missing package, MSBuild fails
 # in POST_BUILD, so prefer the Windows PowerShell executable with a real path.
@@ -86,7 +93,18 @@ target_link_libraries(NeneEngineLib
     ${SDL3_LIB}
     ${SDL3_IMAGE_LIB}
     ${SDL3_TTF_LIB}
+    ${SDL3_MIXER_LIB}
 )
+
+if(WIN32)
+  target_link_libraries(NeneEngineLib
+    PUBLIC
+      mfplat
+      mfreadwrite
+      mfuuid
+      ole32
+  )
+endif()
 
 # ----------------------------
 # SuperChromeDino executable
