@@ -349,6 +349,7 @@ void NeneRoot::load_tree_from_slot(std::string_view slot_name) {
 }
 
 int NeneRoot::run() {
+    constexpr Uint64 target_frame_ms = 16;
     if (!tree_built) {
         init_node();
         tree_built = true;
@@ -359,6 +360,7 @@ int NeneRoot::run() {
     nnlog("main loop start");
     Uint64 prev_ticks = SDL_GetTicks();
     while (running) {
+        const Uint64 frame_start_ticks = SDL_GetTicks();
         if (input_server) input_server->begin_frame();
         // SDLイベント
         SDL_Event ev;
@@ -389,8 +391,15 @@ int NeneRoot::run() {
         SDL_RenderClear(renderer);
         pulse_render(renderer);
         SDL_RenderPresent(renderer);
-        // ウェイト（後でFPS制御に置換する）
-        SDL_Delay(16);
+        // フレーム処理時間を差し引いて次フレームまで待機
+        const Uint64 frame_elapsed_ms = SDL_GetTicks() - frame_start_ticks;
+        if (frame_elapsed_ms < target_frame_ms) {
+            SDL_Delay(static_cast<Uint32>(target_frame_ms - frame_elapsed_ms));
+        } else if (frame_elapsed_ms > target_frame_ms) {
+            nnlog("frame processing exceeded interval: "
+                  + std::to_string(frame_elapsed_ms) + "ms > "
+                  + std::to_string(target_frame_ms) + "ms");
+        }
     }
     nnlog("main loop end");
     return 0;
