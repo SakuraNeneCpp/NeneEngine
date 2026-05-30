@@ -18,6 +18,11 @@ static constexpr int kStageCount = 3;
 static constexpr float kStageClearScore = 1000.0f;
 static constexpr const char* kStageProgressSlot = "stage_progress";
 static constexpr const char* kStageProgressNode = "stage_progress";
+static constexpr const char* kSettingsSlot = "_settings";
+static constexpr const char* kSettingSeVolume = "se_volume";
+static constexpr const char* kSettingBgmVolume = "bgm_volume";
+static constexpr const char* kSettingCursorVisible = "cursor_visible";
+static constexpr const char* kSettingDinoControl = "dino_control";
 static constexpr const char* kStageSceneNames[kStageCount] = {
     "stage_1_scene",
     "stage_2_scene",
@@ -36,6 +41,73 @@ static const char* stage_scene_name(int stage) {
 
 static std::string stage_clear_key(int stage) {
     return "stage_" + std::to_string(stage) + "_cleared";
+}
+
+static int dino_control_preset(const NeneBlackboard& blackboard) {
+    return (blackboard.getf(kSettingDinoControl, 0.0f) > 0.5f) ? 1 : 0;
+}
+
+static const char* dino_confirm_key_name(const NeneBlackboard& blackboard) {
+    return dino_control_preset(blackboard) == 0 ? "Space" : "Enter";
+}
+
+static std::vector<NeneInputBinding> dino_control_bindings(int preset) {
+    if (preset == 1) {
+        return {
+            NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                             static_cast<int>(SDLK_D), "move_right"),
+            NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                             static_cast<int>(SDLK_A), "move_left"),
+            NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                             static_cast<int>(SDLK_LSHIFT), "dash"),
+            NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                             static_cast<int>(SDLK_RSHIFT), "dash"),
+            NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                             static_cast<int>(SDLK_W), "jump"),
+            NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                             static_cast<int>(SDLK_RETURN), "jump"),
+        };
+    }
+    return {
+        NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                         static_cast<int>(SDLK_RIGHT), "move_right"),
+        NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                         static_cast<int>(SDLK_LEFT), "move_left"),
+        NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                         static_cast<int>(SDLK_LSHIFT), "dash"),
+        NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                         static_cast<int>(SDLK_RSHIFT), "dash"),
+        NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                         static_cast<int>(SDLK_SPACE), "jump"),
+        NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                         static_cast<int>(SDLK_UP), "jump"),
+    };
+}
+
+static void apply_dino_control_setting(NeneBlackboard& blackboard) {
+    blackboard.input_maps["play"] = dino_control_bindings(dino_control_preset(blackboard));
+}
+
+static void apply_cursor_setting(const NeneBlackboard& blackboard) {
+    if (blackboard.getf(kSettingCursorVisible, 1.0f) > 0.5f) {
+        SDL_ShowCursor();
+    } else {
+        SDL_HideCursor();
+    }
+}
+
+static void ensure_game_settings(NeneBlackboard& blackboard) {
+    if (blackboard.fps != 30 && blackboard.fps != 60) blackboard.fps = 60;
+    blackboard.ensure_persistentf(kSettingSeVolume, 5.0f);
+    blackboard.ensure_persistentf(kSettingBgmVolume, 5.0f);
+    blackboard.ensure_persistentf(kSettingCursorVisible, 1.0f);
+    blackboard.ensure_persistentf(kSettingDinoControl, 0.0f);
+}
+
+static void apply_game_settings(NeneBlackboard& blackboard) {
+    ensure_game_settings(blackboard);
+    apply_cursor_setting(blackboard);
+    apply_dino_control_setting(blackboard);
 }
 
 // 恐竜
@@ -733,9 +805,10 @@ protected:
         font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
         // 固定テキストは一度だけ作ればOK
         game_over_tex_ = font_loader->get_text_texture(font_path_, 64, "Game Over", SDL_Color{255,255,255,255});
-        restart_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Restart", SDL_Color{255,255,255,255});
         stage_clear_tex_ = font_loader->get_text_texture(font_path_, 64, "Stage Clear", SDL_Color{255,255,255,255});
-        stage_select_tex_ = font_loader->get_text_texture(font_path_, 24, "Press Space to Stage Select", SDL_Color{255,255,255,255});
+        const std::string confirm_key = dino_confirm_key_name(*blackboard);
+        restart_tex_ = font_loader->get_text_texture(font_path_, 24, "Press " + confirm_key + " to Restart", SDL_Color{255,255,255,255});
+        stage_select_tex_ = font_loader->get_text_texture(font_path_, 24, "Press " + confirm_key + " to Stage Select", SDL_Color{255,255,255,255});
         // スコア初期テクスチャ
         update_score_texture_(0);
         // 初期状態
@@ -810,19 +883,17 @@ protected:
             SDL_RenderTexture(r, prompt_tex, nullptr, &rs_dst);
         }
     }
-    void handle_sdl_event(const SDL_Event& ev) override {
+    void handle_nene_input(const NeneInput& input) override {
         if (!blackboard) return;
         const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
         const bool stage_clear = (blackboard->getf("stage_clear", 0.0f) > 0.5f);
         if (!game_over && !stage_clear) return;
-        if (ev.type == SDL_EVENT_KEY_DOWN) {
-            if (ev.key.key == SDLK_SPACE) {
-                const char* next_scene = stage_clear
-                    ? "stage_select_scene"
-                    : stage_scene_name(static_cast<int>(blackboard->getf("selected_stage", 1.0f)));
-                send_mail(NeneMail("scene_switch", this->name, "switch_to", next_scene));
-            }
-        }
+        if (input.action != "jump") return;
+        if (input.phase != NeneInputPhase::Pressed) return;
+        const char* next_scene = stage_clear
+            ? "stage_select_scene"
+            : stage_scene_name(static_cast<int>(blackboard->getf("selected_stage", 1.0f)));
+        send_mail(NeneMail("scene_switch", this->name, "switch_to", next_scene));
     }
 private:
     void update_score_texture_(int score_i) {
@@ -859,20 +930,7 @@ protected:
             blackboard->setf("world_scroll_speed", 0.0f);
             // コライダー可視化
             blackboard->setf("show_hitbox", 1.0f);
-            blackboard->set_default_input_map("play", {
-                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
-                                 static_cast<int>(SDLK_RIGHT), "move_right"),
-                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
-                                 static_cast<int>(SDLK_LEFT), "move_left"),
-                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
-                                 static_cast<int>(SDLK_LSHIFT), "dash"),
-                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
-                                 static_cast<int>(SDLK_RSHIFT), "dash"),
-                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
-                                 static_cast<int>(SDLK_SPACE), "jump"),
-                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
-                                 static_cast<int>(SDLK_UP), "jump"),
-            });
+            blackboard->set_default_input_map("play", dino_control_bindings(0));
         }
         if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
         else nnerr("no collision world");
@@ -941,6 +999,7 @@ protected:
         continue_tex_ = font_loader->get_text_texture(font_path_, 32, "Continue", SDL_Color{255, 255, 255, 255});
         continue_disabled_tex_ = font_loader->get_text_texture(font_path_, 32, "Continue", SDL_Color{150, 150, 150, 255});
         new_game_tex_ = font_loader->get_text_texture(font_path_, 32, "New Game", SDL_Color{255, 255, 255, 255});
+        settings_tex_ = font_loader->get_text_texture(font_path_, 32, "Settings", SDL_Color{255, 255, 255, 255});
         quit_game_tex_ = font_loader->get_text_texture(font_path_, 32, "Quit Game", SDL_Color{255, 255, 255, 255});
         select_tex_ = font_loader->get_text_texture(font_path_, 24, "Select", SDL_Color{255, 255, 255, 255});
         confirm_tex_ = font_loader->get_text_texture(font_path_, 24, "Confirm", SDL_Color{255, 255, 255, 255});
@@ -978,12 +1037,13 @@ protected:
         SDL_RenderTexture(r, title_tex_, nullptr, &text_dst);
 
         const float menu_x = ww * 0.442f;
-        const float menu_y = wh * 0.674f;
+        const float menu_y = wh * 0.640f;
         const float menu_gap = unit * 0.052f;
         render_menu_item_(r, MenuItem::Continue, continue_available_ ? continue_tex_ : continue_disabled_tex_,
                           menu_x, menu_y);
         render_menu_item_(r, MenuItem::NewGame, new_game_tex_, menu_x, menu_y + menu_gap);
-        render_menu_item_(r, MenuItem::QuitGame, quit_game_tex_, menu_x, menu_y + menu_gap * 2.0f);
+        render_menu_item_(r, MenuItem::Settings, settings_tex_, menu_x, menu_y + menu_gap * 2.0f);
+        render_menu_item_(r, MenuItem::QuitGame, quit_game_tex_, menu_x, menu_y + menu_gap * 3.0f);
         if (!continue_available_) {
             const float lock_size = unit * 0.037f;
             float continue_w = 0.0f, continue_h = 0.0f;
@@ -1013,7 +1073,8 @@ private:
     enum class MenuItem {
         Continue = 0,
         NewGame = 1,
-        QuitGame = 2
+        Settings = 2,
+        QuitGame = 3
     };
 
     bool is_enabled_(MenuItem item) const {
@@ -1021,10 +1082,10 @@ private:
     }
     void move_selection_(int delta) {
         int next = static_cast<int>(selected_item_);
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 4; ++i) {
             next += delta;
-            if (next < 0) next = 2;
-            if (next > 2) next = 0;
+            if (next < 0) next = 3;
+            if (next > 3) next = 0;
             const auto item = static_cast<MenuItem>(next);
             if (is_enabled_(item)) {
                 selected_item_ = item;
@@ -1043,6 +1104,10 @@ private:
             if (save_service) save_service->remove(kStageProgressSlot);
             if (blackboard) blackboard->setf("selected_stage", 1.0f);
             send_mail(NeneMail("scene_switch", this->name, "switch_to", "stage_select_scene"));
+            return;
+        }
+        if (selected_item_ == MenuItem::Settings) {
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", "settings_scene"));
             return;
         }
         if (selected_item_ == MenuItem::QuitGame) {
@@ -1165,6 +1230,7 @@ private:
     SDL_Texture* continue_tex_ = nullptr;
     SDL_Texture* continue_disabled_tex_ = nullptr;
     SDL_Texture* new_game_tex_ = nullptr;
+    SDL_Texture* settings_tex_ = nullptr;
     SDL_Texture* quit_game_tex_ = nullptr;
     SDL_Texture* select_tex_ = nullptr;
     SDL_Texture* confirm_tex_ = nullptr;
@@ -1174,6 +1240,243 @@ private:
     std::string font_path_;
     MenuItem selected_item_ = MenuItem::NewGame;
     bool continue_available_ = false;
+};
+
+// ユーザー設定シーン
+class SettingsScene final : public NeneNode {
+public:
+    explicit SettingsScene(std::string name) : NeneNode(std::move(name)) {}
+protected:
+    void init_node() override {
+        if (!asset_loader || !font_loader || !path_service || !blackboard) {
+            nnthrow("services not ready (asset_loader/font_loader/path_service/blackboard)");
+        }
+        ensure_game_settings(*blackboard);
+        apply_game_settings(*blackboard);
+
+        font_path_ = path_service->resolve("assets/fonts/NotoSansJP-Regular.ttf");
+        key_up_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_up.png"));
+        key_down_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_down.png"));
+        key_left_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_left.png"));
+        key_right_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_right.png"));
+        key_escape_tex_ = asset_loader->get_texture(path_service->resolve("assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_escape.png"));
+
+        title_tex_ = font_loader->get_text_texture(font_path_, 40, "Settings", SDL_Color{255,255,255,255});
+        select_option_tex_ = font_loader->get_text_texture(font_path_, 24, "Select Option", SDL_Color{255,255,255,255});
+        change_option_tex_ = font_loader->get_text_texture(font_path_, 24, "Change Option", SDL_Color{255,255,255,255});
+        return_title_tex_ = font_loader->get_text_texture(font_path_, 24, "Return to Title", SDL_Color{255,255,255,255});
+        saved_tex_ = font_loader->get_text_texture(font_path_, 24, "Saved!", SDL_Color{255,255,255,255});
+        autosave_settings_();
+    }
+    void render(SDL_Renderer* r) override {
+        if (!r || !blackboard) return;
+        int w = 0, h = 0;
+        if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
+
+        const float ww = static_cast<float>(w);
+        const float wh = static_cast<float>(h);
+        const float unit = std::min(ww, wh);
+        const float title_x = ww * 0.041f;
+        const float title_y = wh * 0.112f;
+        const float label_right = ww * 0.197f;
+        const float divider_x = ww * 0.233f;
+        const float option_x = ww * 0.269f;
+        const float option2_x = ww * 0.405f;
+        const float y0 = wh * 0.305f;
+        const float gap_y = unit * 0.098f;
+
+        render_texture_left_top_(r, title_tex_, title_x, title_y);
+
+        SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+        SDL_RenderLine(r, divider_x, wh * 0.262f, divider_x, wh * 0.692f);
+
+        for (int i = 0; i < kItemCount; ++i) {
+            const float y = y0 + gap_y * static_cast<float>(i);
+            render_label_(r, i, label_right, (i == 4) ? y + 12.0f : y);
+        }
+        render_fps_(r, option_x, option2_x, y0);
+        render_volume_(r, kSettingSeVolume, option_x, y0 + gap_y);
+        render_volume_(r, kSettingBgmVolume, option_x, y0 + gap_y * 2.0f);
+        render_binary_(r, option_x, option2_x, y0 + gap_y * 3.0f,
+                       "Show", "Hide", blackboard->getf(kSettingCursorVisible, 1.0f) > 0.5f);
+        render_dino_control_(r, option_x, option2_x, y0 + gap_y * 4.0f);
+        render_controls_(r, ww, wh, unit);
+        render_saved_(r, ww, wh, unit);
+    }
+    void handle_sdl_event(const SDL_Event& ev) override {
+        if (ev.type != SDL_EVENT_KEY_DOWN) return;
+        if (ev.key.repeat) return;
+        if (ev.key.key == SDLK_UP) {
+            move_selection_(-1);
+            return;
+        }
+        if (ev.key.key == SDLK_DOWN) {
+            move_selection_(1);
+            return;
+        }
+        if (ev.key.key == SDLK_LEFT) {
+            change_option_(-1);
+            return;
+        }
+        if (ev.key.key == SDLK_RIGHT) {
+            change_option_(1);
+            return;
+        }
+        if (ev.key.key == SDLK_ESCAPE) {
+            send_mail(NeneMail("scene_switch", this->name, "switch_to", "title_scene"));
+        }
+    }
+private:
+    static constexpr int kItemCount = 5;
+
+    void move_selection_(int delta) {
+        selected_item_ += delta;
+        if (selected_item_ < 0) selected_item_ = kItemCount - 1;
+        if (selected_item_ >= kItemCount) selected_item_ = 0;
+    }
+    void change_option_(int delta) {
+        if (!blackboard) return;
+        if (selected_item_ == 0) {
+            blackboard->fps = (blackboard->fps == 60) ? 30 : 60;
+        } else if (selected_item_ == 1) {
+            const int v = std::clamp(volume_value_(kSettingSeVolume) + delta, 0, 9);
+            blackboard->set_persistentf(kSettingSeVolume, static_cast<float>(v));
+        } else if (selected_item_ == 2) {
+            const int v = std::clamp(volume_value_(kSettingBgmVolume) + delta, 0, 9);
+            blackboard->set_persistentf(kSettingBgmVolume, static_cast<float>(v));
+        } else if (selected_item_ == 3) {
+            const bool show = blackboard->getf(kSettingCursorVisible, 1.0f) <= 0.5f;
+            blackboard->set_persistentf(kSettingCursorVisible, show ? 1.0f : 0.0f);
+            apply_cursor_setting(*blackboard);
+        } else if (selected_item_ == 4) {
+            const int next = dino_control_preset(*blackboard) == 0 ? 1 : 0;
+            blackboard->set_persistentf(kSettingDinoControl, static_cast<float>(next));
+            apply_dino_control_setting(*blackboard);
+        }
+        autosave_settings_();
+    }
+    int volume_value_(const std::string& key) const {
+        if (!blackboard) return 5;
+        return std::clamp(static_cast<int>(std::round(blackboard->getf(key, 5.0f))), 0, 9);
+    }
+    void autosave_settings_() {
+        if (!save_service || !blackboard) return;
+        try {
+            NeneSaveDocument doc;
+            doc.set_metadata("root_name", blackboard->root_name);
+            blackboard->save_settings(doc);
+            save_service->save(kSettingsSlot, doc);
+            saved_visible_ = true;
+        } catch (const std::exception& e) {
+            saved_visible_ = false;
+            nnerr(std::string("failed to autosave settings: ") + e.what());
+        }
+    }
+    SDL_Texture* text_(const std::string& text, int size, SDL_Color color) {
+        return font_loader->get_text_texture(font_path_, size, text, color);
+    }
+    void render_label_(SDL_Renderer* r, int index, float right, float cy) {
+        const SDL_Color color = (index == selected_item_)
+            ? SDL_Color{255,255,255,255}
+            : SDL_Color{160,160,160,255};
+        static constexpr const char* labels[kItemCount] = {
+            "FPS", "SE Volume", "BGM Volume", "Cursor in Window", "Dino Control"
+        };
+        render_texture_right_center_(r, text_(labels[index], 28, color), right, cy);
+    }
+    void render_fps_(SDL_Renderer* r, float x0, float x1, float cy) {
+        const bool is_60 = blackboard && blackboard->fps == 60;
+        render_option_text_(r, "60", x0, cy, is_60);
+        render_option_text_(r, "30", x1, cy, !is_60);
+    }
+    void render_volume_(SDL_Renderer* r, const std::string& key, float x, float cy) {
+        const int selected = volume_value_(key);
+        const float digit_gap = 27.0f;
+        for (int i = 0; i <= 9; ++i) {
+            render_option_text_(r, std::to_string(i), x + digit_gap * static_cast<float>(i), cy, i == selected);
+        }
+    }
+    void render_binary_(SDL_Renderer* r, float x0, float x1, float cy,
+                        const std::string& left, const std::string& right, bool left_selected) {
+        render_option_text_(r, left, x0, cy, left_selected);
+        render_option_text_(r, right, x1, cy, !left_selected);
+    }
+    void render_dino_control_(SDL_Renderer* r, float x0, float x1, float cy) {
+        const bool arrows = !blackboard || dino_control_preset(*blackboard) == 0;
+        render_option_text_(r, "Arrows", x0, cy - 12.0f, arrows);
+        render_option_text_(r, "+ Space", x0, cy + 17.0f, arrows);
+        render_option_text_(r, "WASD", x1, cy - 12.0f, !arrows);
+        render_option_text_(r, "+ Enter", x1, cy + 17.0f, !arrows);
+    }
+    void render_option_text_(SDL_Renderer* r, const std::string& text, float x, float cy, bool selected) {
+        const SDL_Color color = selected ? SDL_Color{255,255,255,255} : SDL_Color{160,160,160,255};
+        render_texture_left_center_(r, text_(text, 28, color), x, cy);
+    }
+    void render_controls_(SDL_Renderer* r, float ww, float wh, float unit) {
+        const float key = unit * 0.0665f;
+        const float gap = unit * 0.017f;
+        const float x = ww * 0.703f;
+        const float y = wh * 0.321f;
+        const float line_gap = unit * 0.139f;
+        const float label_x = x + key * 2.0f + gap + unit * 0.032f;
+
+        render_texture_scaled_(r, key_up_tex_, x, y, key, key);
+        render_texture_scaled_(r, key_down_tex_, x + key + gap, y, key, key);
+        render_texture_left_center_(r, select_option_tex_, label_x, y + key * 0.5f);
+
+        render_texture_scaled_(r, key_left_tex_, x, y + line_gap, key, key);
+        render_texture_scaled_(r, key_right_tex_, x + key + gap, y + line_gap, key, key);
+        render_texture_left_center_(r, change_option_tex_, label_x, y + line_gap + key * 0.5f);
+
+        render_texture_scaled_(r, key_escape_tex_, x, y + line_gap * 2.0f, key, key);
+        render_texture_left_center_(r, return_title_tex_, label_x - key - gap, y + line_gap * 2.0f + key * 0.5f);
+    }
+    void render_saved_(SDL_Renderer* r, float ww, float wh, float unit) {
+        if (!saved_visible_) return;
+        const float x = ww * 0.020f;
+        const float y = wh - unit * 0.058f;
+        render_texture_left_center_(r, saved_tex_, x, y);
+    }
+    static void render_texture_left_top_(SDL_Renderer* r, SDL_Texture* tex, float x, float y) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ x, y, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_left_center_(SDL_Renderer* r, SDL_Texture* tex, float left, float cy) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ left, cy - th * 0.5f, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_right_center_(SDL_Renderer* r, SDL_Texture* tex, float right, float cy) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        SDL_FRect dst{ right - tw, cy - th * 0.5f, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+    static void render_texture_scaled_(SDL_Renderer* r, SDL_Texture* tex, float x, float y, float w, float h) {
+        if (!tex) return;
+        SDL_FRect dst{ x, y, w, h };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
+
+    std::string font_path_;
+    SDL_Texture* title_tex_ = nullptr;
+    SDL_Texture* select_option_tex_ = nullptr;
+    SDL_Texture* change_option_tex_ = nullptr;
+    SDL_Texture* return_title_tex_ = nullptr;
+    SDL_Texture* saved_tex_ = nullptr;
+    SDL_Texture* key_up_tex_ = nullptr;
+    SDL_Texture* key_down_tex_ = nullptr;
+    SDL_Texture* key_left_tex_ = nullptr;
+    SDL_Texture* key_right_tex_ = nullptr;
+    SDL_Texture* key_escape_tex_ = nullptr;
+    int selected_item_ = 0;
+    bool saved_visible_ = false;
 };
 
 // ステージ選択シーン
@@ -1431,6 +1734,9 @@ protected:
         register_node("title_scene", [] {
             return std::make_unique<TitleScene>("title_scene");
         });
+        register_node("settings_scene", [] {
+            return std::make_unique<SettingsScene>("settings_scene");
+        });
         register_node("stage_select_scene", [] {
             return std::make_unique<StageSelectScene>("stage_select_scene");
         });
@@ -1462,6 +1768,7 @@ public:
     }
 protected:
     void init_node() override {
+        if (blackboard) apply_game_settings(*blackboard);
         // シーンスイッチを生成.
         add_child(std::make_unique<SceneSwitch>("scene_switch"));
     }
