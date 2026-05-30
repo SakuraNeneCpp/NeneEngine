@@ -6,6 +6,7 @@
 #include <string>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 #include <vector>
 #include <cmath>
@@ -443,12 +444,14 @@ private:
     std::unordered_map<std::string, bool> changed_;
 };
 
+class NeneSaveDocument;
+
 // ノード間データ共有サービス
 class NeneBlackboard {
 public:
     // --- デフォルト項目 ---
     // プレイモード(デバック/本番)
-    PlayMode play_mode;
+    PlayMode play_mode = PlayMode::Debug;
     // FPS
     int fps = 60;
     // ルートノードの名前
@@ -466,6 +469,14 @@ public:
     std::unordered_map<std::string, std::vector<NeneInputBinding>> input_maps;
     void bind_input(std::string map_name, NeneInputBinding binding) {
         input_maps[std::move(map_name)].push_back(std::move(binding));
+    }
+    bool has_input_map(std::string_view map_name) const {
+        return input_maps.find(std::string(map_name)) != input_maps.end();
+    }
+    bool set_default_input_map(std::string map_name, std::vector<NeneInputBinding> bindings) {
+        if (input_maps.find(map_name) != input_maps.end()) return false;
+        input_maps.emplace(std::move(map_name), std::move(bindings));
+        return true;
     }
     void bind_key(std::string map_name, SDL_Keycode key, std::string action, int player = 0) {
         bind_input(std::move(map_name),
@@ -493,6 +504,10 @@ public:
     std::unordered_map<std::string, float> user_floats;
     // API
     void setf(const std::string& key, float v) { user_floats[key] = v; }
+    void set_persistentf(const std::string& key, float v) {
+        setf(key, v);
+        mark_persistentf(key);
+    }
     // 無い値をgetしようとするとデフォルトが返る
     float getf(const std::string& key, float default_value = 0.0f) const {
         auto it = user_floats.find(key);
@@ -507,6 +522,29 @@ public:
         auto [it, inserted] = user_floats.emplace(key, default_value);
         return it->second;
     }
+    float& ensure_persistentf(const std::string& key, float default_value = 0.0f) {
+        mark_persistentf(key);
+        return ensuref(key, default_value);
+    }
+    void mark_persistentf(const std::string& key) {
+        if (!key.empty()) persistent_float_keys_.insert(key);
+    }
+    void unmark_persistentf(const std::string& key) {
+        persistent_float_keys_.erase(key);
+    }
+    bool is_persistentf(std::string_view key) const {
+        return persistent_float_keys_.find(std::string(key)) != persistent_float_keys_.end();
+    }
+    void clear_persistentf() {
+        persistent_float_keys_.clear();
+    }
+    const std::unordered_set<std::string>& persistent_float_keys() const {
+        return persistent_float_keys_;
+    }
+    void save_settings(NeneSaveDocument& doc) const;
+    void load_settings(const NeneSaveDocument& doc);
+private:
+    std::unordered_set<std::string> persistent_float_keys_;
 };
 
 

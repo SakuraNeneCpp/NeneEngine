@@ -3,6 +3,7 @@
 #include <queue>
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
 #include <SDL3_image/SDL_image.h>
 #include <NeneEngine/NeneNode.hpp>
 
@@ -348,9 +349,43 @@ void NeneRoot::load_tree_from_slot(std::string_view slot_name) {
     load_subtree(doc);
 }
 
+void NeneRoot::save_blackboard_settings_to_slot(std::string_view slot_name) const {
+    if (!save_service) nnthrow("save_blackboard_settings_to_slot: save_service is not configured");
+    if (!blackboard) nnthrow("save_blackboard_settings_to_slot: blackboard is not configured");
+    NeneSaveDocument doc;
+    doc.set_metadata("root_name", name);
+    blackboard->save_settings(doc);
+    save_service->save(slot_name, doc);
+}
+
+bool NeneRoot::load_blackboard_settings_from_slot(std::string_view slot_name) {
+    if (!save_service) nnthrow("load_blackboard_settings_from_slot: save_service is not configured");
+    if (!blackboard) nnthrow("load_blackboard_settings_from_slot: blackboard is not configured");
+    if (!save_service->slot_exists(slot_name)) return false;
+    const NeneSaveDocument doc = save_service->load(slot_name);
+    blackboard->load_settings(doc);
+    apply_blackboard_window_settings_();
+    return true;
+}
+
+void NeneRoot::apply_blackboard_window_settings_() {
+    if (!window || !blackboard) return;
+    if (blackboard->window_w > 0 && blackboard->window_h > 0) {
+        SDL_SetWindowSize(window, blackboard->window_w, blackboard->window_h);
+    }
+    SDL_SetWindowPosition(window, blackboard->window_x, blackboard->window_y);
+}
+
 int NeneRoot::run() {
-    constexpr Uint64 target_frame_ms = 16;
+    constexpr int fallback_fps = 60;
     if (!tree_built) {
+        if (auto_blackboard_settings_ && save_service) {
+            try {
+                load_blackboard_settings_from_slot(blackboard_settings_slot_);
+            } catch (const std::exception& e) {
+                nnerr(std::string("failed to load blackboard settings: ") + e.what());
+            }
+        }
         init_node();
         tree_built = true;
         nnlog("game tree initialized");
@@ -392,16 +427,26 @@ int NeneRoot::run() {
         pulse_render(renderer);
         SDL_RenderPresent(renderer);
         // フレーム処理時間を差し引いて次フレームまで待機
-        const Uint64 frame_elapsed_ms = SDL_GetTicks() - frame_start_ticks;
+        const int target_fps = (blackboard && blackboard->fps > 0) ? blackboard->fps : fallback_fps;
+        const double target_frame_ms = 1000.0 / static_cast<double>(target_fps);
+        const double frame_elapsed_ms = static_cast<double>(SDL_GetTicks() - frame_start_ticks);
         if (frame_elapsed_ms < target_frame_ms) {
-            SDL_Delay(static_cast<Uint32>(target_frame_ms - frame_elapsed_ms));
+            SDL_Delay(static_cast<Uint32>(std::ceil(target_frame_ms - frame_elapsed_ms)));
         } else if (frame_elapsed_ms > target_frame_ms) {
             nnlog("frame processing exceeded interval: "
                   + std::to_string(frame_elapsed_ms) + "ms > "
-                  + std::to_string(target_frame_ms) + "ms");
+                  + std::to_string(target_frame_ms) + "ms (fps="
+                  + std::to_string(target_fps) + ")");
         }
     }
     nnlog("main loop end");
+    if (auto_blackboard_settings_ && save_service) {
+        try {
+            save_blackboard_settings_to_slot(blackboard_settings_slot_);
+        } catch (const std::exception& e) {
+            nnerr(std::string("failed to save blackboard settings: ") + e.what());
+        }
+    }
     return 0;
 }
 

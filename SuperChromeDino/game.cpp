@@ -859,13 +859,20 @@ protected:
             blackboard->setf("world_scroll_speed", 0.0f);
             // コライダー可視化
             blackboard->setf("show_hitbox", 1.0f);
-            blackboard->clear_input_map("play");
-            blackboard->bind_key("play", SDLK_RIGHT, "move_right");
-            blackboard->bind_key("play", SDLK_LEFT, "move_left");
-            blackboard->bind_key("play", SDLK_LSHIFT, "dash");
-            blackboard->bind_key("play", SDLK_RSHIFT, "dash");
-            blackboard->bind_key("play", SDLK_SPACE, "jump");
-            blackboard->bind_key("play", SDLK_UP, "jump");
+            blackboard->set_default_input_map("play", {
+                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                 static_cast<int>(SDLK_RIGHT), "move_right"),
+                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                 static_cast<int>(SDLK_LEFT), "move_left"),
+                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                 static_cast<int>(SDLK_LSHIFT), "dash"),
+                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                 static_cast<int>(SDLK_RSHIFT), "dash"),
+                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                 static_cast<int>(SDLK_SPACE), "jump"),
+                NeneInputBinding(NeneInputDevice::Keyboard, NeneInputControl::Button,
+                                 static_cast<int>(SDLK_UP), "jump"),
+            });
         }
         if (collision_world) collision_world->clear(); // リセットのためにコライダーをクリア
         else nnerr("no collision world");

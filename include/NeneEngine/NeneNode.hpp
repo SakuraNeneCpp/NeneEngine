@@ -124,6 +124,14 @@ public:
                                 std::string extension = ".nnsave");
     void save_tree_to_slot(std::string_view slot_name) const;
     void load_tree_from_slot(std::string_view slot_name);
+    void set_auto_blackboard_settings(bool enabled) {
+        auto_blackboard_settings_ = enabled;
+    }
+    void set_blackboard_settings_slot(std::string slot_name) {
+        blackboard_settings_slot_ = std::move(slot_name);
+    }
+    void save_blackboard_settings_to_slot(std::string_view slot_name = "_settings") const;
+    bool load_blackboard_settings_from_slot(std::string_view slot_name = "_settings");
 private:
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
@@ -131,6 +139,9 @@ private:
     virtual void handle_sdl_event(const SDL_Event&) override;
     virtual void handle_nene_mail(const NeneMail& mail) override;
     bool tree_built = false;
+    bool auto_blackboard_settings_ = true;
+    std::string blackboard_settings_slot_ = "_settings";
+    void apply_blackboard_window_settings_();
 };
 
 // ねね入力通訳

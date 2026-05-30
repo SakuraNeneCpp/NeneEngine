@@ -80,6 +80,47 @@ std::filesystem::path nene_save_slot_path_(const std::string& save_dir,
     }
     return std::filesystem::path(save_dir) / file_name;
 }
+
+constexpr const char* nene_blackboard_settings_node_ = "@blackboard/settings";
+constexpr const char* nene_blackboard_settings_type_ = "NeneBlackboardSettings";
+constexpr const char* nene_blackboard_input_map_prefix_ = "@blackboard/input/";
+constexpr const char* nene_blackboard_input_map_type_ = "NeneInputMap";
+
+bool nene_blackboard_is_settings_node_(const std::string& path) {
+    return path == nene_blackboard_settings_node_;
+}
+
+bool nene_blackboard_is_input_map_node_(const std::string& path) {
+    return path.rfind(nene_blackboard_input_map_prefix_, 0) == 0;
+}
+
+std::string nene_blackboard_input_map_path_(std::string_view map_name) {
+    return std::string(nene_blackboard_input_map_prefix_) + std::string(map_name);
+}
+
+std::string nene_blackboard_indexed_key_(std::string_view base, int index, std::string_view field) {
+    return std::string(base) + "." + std::to_string(index) + "." + std::string(field);
+}
+
+bool nene_blackboard_valid_device_(int value) {
+    switch (static_cast<NeneInputDevice>(value)) {
+        case NeneInputDevice::Unknown:
+        case NeneInputDevice::Keyboard:
+        case NeneInputDevice::Mouse:
+        case NeneInputDevice::Gamepad:
+            return true;
+    }
+    return false;
+}
+
+bool nene_blackboard_valid_control_(int value) {
+    switch (static_cast<NeneInputControl>(value)) {
+        case NeneInputControl::Button:
+        case NeneInputControl::Axis:
+            return true;
+    }
+    return false;
+}
 }
 
 // NeneSaveWriter
@@ -284,6 +325,147 @@ NeneSaveDocument NeneSaveDocument::parse(std::string_view text) {
         throw std::runtime_error("NeneSaveDocument: empty document");
     }
     return doc;
+}
+
+// NeneBlackboard
+void NeneBlackboard::save_settings(NeneSaveDocument& doc) const {
+    doc.set_metadata("blackboard_settings_version", "1");
+
+    for (auto it = doc.nodes.begin(); it != doc.nodes.end();) {
+        if (nene_blackboard_is_settings_node_(it->first)
+            || nene_blackboard_is_input_map_node_(it->first)) {
+            it = doc.nodes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    auto& settings_record = doc.node(nene_blackboard_settings_node_);
+    settings_record.type = nene_blackboard_settings_type_;
+    NeneSaveWriter settings(settings_record);
+    settings.set_int("fps", fps);
+    settings.set_int("window_x", window_x);
+    settings.set_int("window_y", window_y);
+    settings.set_int("window_w", window_w);
+    settings.set_int("window_h", window_h);
+
+    std::vector<std::string> float_keys;
+    float_keys.reserve(persistent_float_keys_.size());
+    for (const auto& key : persistent_float_keys_) {
+        if (user_floats.find(key) != user_floats.end()) float_keys.push_back(key);
+    }
+    std::sort(float_keys.begin(), float_keys.end());
+
+    int saved_float_count = 0;
+    for (const auto& key : float_keys) {
+        const auto it = user_floats.find(key);
+        if (it == user_floats.end()) continue;
+        settings.set(nene_blackboard_indexed_key_("user_float", saved_float_count, "key"), key);
+        settings.set_float(nene_blackboard_indexed_key_("user_float", saved_float_count, "value"), it->second);
+        ++saved_float_count;
+    }
+    settings.set_int("user_float_count", saved_float_count);
+
+    std::vector<std::string> map_names;
+    map_names.reserve(input_maps.size());
+    for (const auto& [map_name, bindings] : input_maps) {
+        map_names.push_back(map_name);
+    }
+    std::sort(map_names.begin(), map_names.end());
+
+    for (const auto& map_name : map_names) {
+        const auto map_it = input_maps.find(map_name);
+        if (map_it == input_maps.end()) continue;
+
+        auto& map_record = doc.node(nene_blackboard_input_map_path_(map_name));
+        map_record.type = nene_blackboard_input_map_type_;
+        NeneSaveWriter map_writer(map_record);
+        map_writer.set("name", map_name);
+        map_writer.set_int("count", static_cast<int>(map_it->second.size()));
+
+        for (int i = 0; i < static_cast<int>(map_it->second.size()); ++i) {
+            const auto& binding = map_it->second[static_cast<std::size_t>(i)];
+            map_writer.set_int(nene_blackboard_indexed_key_("binding", i, "device"),
+                               static_cast<int>(binding.device));
+            map_writer.set_int(nene_blackboard_indexed_key_("binding", i, "control"),
+                               static_cast<int>(binding.control));
+            map_writer.set_int(nene_blackboard_indexed_key_("binding", i, "code"), binding.code);
+            map_writer.set(nene_blackboard_indexed_key_("binding", i, "action"), binding.action);
+            map_writer.set_float(nene_blackboard_indexed_key_("binding", i, "scale"), binding.scale);
+            map_writer.set_int(nene_blackboard_indexed_key_("binding", i, "player"), binding.player);
+            map_writer.set_float(nene_blackboard_indexed_key_("binding", i, "dead_zone"), binding.dead_zone);
+        }
+    }
+}
+
+void NeneBlackboard::load_settings(const NeneSaveDocument& doc) {
+    if (const auto* settings_record = doc.find_node(nene_blackboard_settings_node_)) {
+        NeneSaveReader settings(*settings_record);
+        const int loaded_fps = settings.get_int("fps", fps);
+        if (loaded_fps > 0) fps = loaded_fps;
+
+        window_x = settings.get_int("window_x", window_x);
+        window_y = settings.get_int("window_y", window_y);
+        const int loaded_window_w = settings.get_int("window_w", window_w);
+        const int loaded_window_h = settings.get_int("window_h", window_h);
+        if (loaded_window_w > 0) window_w = loaded_window_w;
+        if (loaded_window_h > 0) window_h = loaded_window_h;
+        ground_y = static_cast<float>(window_h) - 120.0f;
+
+        const int user_float_count = settings.get_int("user_float_count", 0);
+        for (int i = 0; i < user_float_count; ++i) {
+            const std::string key =
+                settings.get_string(nene_blackboard_indexed_key_("user_float", i, "key"));
+            if (key.empty()) continue;
+            const float value =
+                settings.get_float(nene_blackboard_indexed_key_("user_float", i, "value"), 0.0f);
+            user_floats[key] = value;
+            persistent_float_keys_.insert(key);
+        }
+    }
+
+    for (const auto& [path, record] : doc.nodes) {
+        if (!nene_blackboard_is_input_map_node_(path)) continue;
+
+        NeneSaveReader reader(record);
+        const std::string fallback_name =
+            path.substr(std::string(nene_blackboard_input_map_prefix_).size());
+        const std::string map_name = reader.get_string("name", fallback_name);
+        if (map_name.empty()) continue;
+
+        int count = reader.get_int("count", 0);
+        if (count < 0) count = 0;
+
+        std::vector<NeneInputBinding> bindings;
+        bindings.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            const int device_value = reader.get_int(
+                nene_blackboard_indexed_key_("binding", i, "device"),
+                static_cast<int>(NeneInputDevice::Keyboard));
+            const int control_value = reader.get_int(
+                nene_blackboard_indexed_key_("binding", i, "control"),
+                static_cast<int>(NeneInputControl::Button));
+            if (!nene_blackboard_valid_device_(device_value)
+                || !nene_blackboard_valid_control_(control_value)) {
+                continue;
+            }
+
+            const std::string action =
+                reader.get_string(nene_blackboard_indexed_key_("binding", i, "action"));
+            if (action.empty()) continue;
+
+            bindings.emplace_back(
+                static_cast<NeneInputDevice>(device_value),
+                static_cast<NeneInputControl>(control_value),
+                reader.get_int(nene_blackboard_indexed_key_("binding", i, "code"), 0),
+                action,
+                reader.get_float(nene_blackboard_indexed_key_("binding", i, "scale"), 1.0f),
+                reader.get_int(nene_blackboard_indexed_key_("binding", i, "player"), 0),
+                reader.get_float(nene_blackboard_indexed_key_("binding", i, "dead_zone"), 0.35f));
+        }
+
+        input_maps[map_name] = std::move(bindings);
+    }
 }
 
 // NeneSaveService

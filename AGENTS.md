@@ -46,3 +46,8 @@
 - Markdown (`.md`) の行末空白はビュワーによって改行として扱われることがあるため, 自動整形や改行統一の際にも削除しない.
 - vcpkg の `applocal.ps1` が WindowsApps の壊れた `pwsh.exe` shim を拾う環境がある. `CMakeLists.txt` では実体のある Windows PowerShell を `Z_VCPKG_POWERSHELL_PATH` に固定しているので, この回避策を不用意に削らない.
 - ライブラリ変更後は `cmake --build build --config Debug` で `SuperChromeDino.exe` までビルドできることを確認する.
+
+### NeneBlackboard settings
+- `NeneBlackboard` の保存対象はユーザー設定レイヤーだけにする. `fps`, ウィンドウ位置/サイズ, `input_maps`, `mark_persistentf()` 済みの float は保存してよいが, `score`, `game_over`, `world_scroll_speed` など実行中の状態を丸ごと保存しない.
+- デフォルト入力マップは `set_default_input_map()` で未設定時だけ登録し, 保存済みのキーコンフィグを `clear_input_map()` で上書きしない.
+- `NeneRoot` は save service がある場合, 既定で `_settings` スロットから Blackboard settings を起動前に読み込み, 終了時に保存する. 不要なゲームでは `set_auto_blackboard_settings(false)` で止める.
