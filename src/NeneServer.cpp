@@ -166,6 +166,28 @@ void nene_sound_check_hr_(HRESULT hr, std::string_view where) {
     throw std::runtime_error(std::string(where) + " failed: " + nene_sound_hresult_(hr));
 }
 
+class NeneComThreadScope_ {
+public:
+    NeneComThreadScope_() {
+        const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(hr)) {
+            initialized_ = true;
+        } else if (hr != RPC_E_CHANGED_MODE) {
+            nene_sound_check_hr_(hr, "CoInitializeEx");
+        }
+    }
+
+    ~NeneComThreadScope_() {
+        if (initialized_) CoUninitialize();
+    }
+
+    NeneComThreadScope_(const NeneComThreadScope_&) = delete;
+    NeneComThreadScope_& operator=(const NeneComThreadScope_&) = delete;
+
+private:
+    bool initialized_ = false;
+};
+
 std::wstring nene_sound_utf8_to_wide_(const std::string& text) {
     if (text.empty()) return {};
     int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
@@ -185,6 +207,7 @@ std::wstring nene_sound_utf8_to_wide_(const std::string& text) {
 NeneDecodedPcm_ nene_sound_decode_media_foundation_(const std::string& path) {
     using Microsoft::WRL::ComPtr;
 
+    NeneComThreadScope_ com_scope;
     const std::wstring wide_path = nene_sound_utf8_to_wide_(path);
     ComPtr<IMFSourceReader> reader;
     nene_sound_check_hr_(
@@ -1203,6 +1226,26 @@ SDL_Texture* NeneFontLoader::get_text_texture(const std::string& fontPath, int f
     SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer_, surf);
     SDL_DestroySurface(surf);
 
+    if (!tex) {
+        throw std::runtime_error(std::string("SDL_CreateTextureFromSurface failed: ") + SDL_GetError());
+    }
+
+    textCache_[fk] = tex;
+    return tex;
+}
+
+SDL_Texture* NeneFontLoader::get_text_texture_from_surface(const std::string& fontPath, int fontSize,
+                                                           const std::string& text, SDL_Color color,
+                                                           SDL_Surface* surface) {
+    (void)fontPath;
+    FontKey fk{ text, fontSize, color };
+    auto it = textCache_.find(fk);
+    if (it != textCache_.end()) return it->second;
+    if (!surface) {
+        throw std::runtime_error("NeneFontLoader: surface is null");
+    }
+
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer_, surface);
     if (!tex) {
         throw std::runtime_error(std::string("SDL_CreateTextureFromSurface failed: ") + SDL_GetError());
     }

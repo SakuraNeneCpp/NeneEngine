@@ -882,6 +882,20 @@ public:
         cache_.emplace(path, tex);
         return tex;
     }
+    SDL_Texture* get_texture_from_surface(const std::string& path, SDL_Surface* surface) {
+        auto it = cache_.find(path);
+        if (it != cache_.end()) return it->second;
+        if (!surface) {
+            throw std::runtime_error("NeneImageLoader: surface is null");
+        }
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer_, surface);
+        if (!tex) {
+            throw std::runtime_error(std::string("[NeneImageLoader] SDL_CreateTextureFromSurface failed '")
+                                     + path + "': " + SDL_GetError());
+        }
+        cache_.emplace(path, tex);
+        return tex;
+    }
 
 private:
     SDL_Renderer* renderer_;
@@ -923,6 +937,9 @@ public:
     TTF_Font* get_font(const std::string& fontPath, int fontSize);
     SDL_Texture* get_text_texture(const std::string& fontPath, int fontSize,
                                   const std::string& text, SDL_Color color);
+    SDL_Texture* get_text_texture_from_surface(const std::string& fontPath, int fontSize,
+                                               const std::string& text, SDL_Color color,
+                                               SDL_Surface* surface);
 private:
     SDL_Renderer* renderer_;
     std::unordered_map<std::string, TTF_Font*> fontCache_;

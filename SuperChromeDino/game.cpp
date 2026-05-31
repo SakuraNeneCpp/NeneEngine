@@ -11,7 +11,11 @@
 #include <cmath>
 #include <vector>
 #include <algorithm>
+#include <functional>
+#include <mutex>
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <NeneEngine/NeneNode.hpp>
 
 static constexpr int kStageCount = 3;
@@ -23,6 +27,10 @@ static constexpr const char* kSettingSeVolume = "se_volume";
 static constexpr const char* kSettingBgmVolume = "bgm_volume";
 static constexpr const char* kSettingCursorVisible = "cursor_visible";
 static constexpr const char* kSettingDinoControl = "dino_control";
+static constexpr const char* kFlagPaused = "paused";
+static constexpr const char* kGameFontPath = "assets/fonts/NotoSansJP-Regular.ttf";
+static constexpr const char* kSpriteSheetPath = "assets/sprites/sprite.png";
+static constexpr const char* kSplashImagePath = "assets/splashscreen.png";
 static constexpr const char* kSeCursorMovePath =
     "assets/se/soundeffect-lab/"
     "\xE3\x82\xAB\xE3\x83\xBC\xE3\x82\xBD\xE3\x83\xAB\xE7\xA7\xBB\xE5\x8B\x95"
@@ -60,6 +68,15 @@ static std::string stage_clear_key(int stage) {
 
 static const char* stage_bgm_path(int stage) {
     return kStageBgmPaths[clamp_stage(stage) - 1];
+}
+
+static bool is_winning_run_stage(int stage) {
+    return clamp_stage(stage) == 3;
+}
+
+static bool is_winning_run_stage(const NeneBlackboard* blackboard) {
+    if (!blackboard) return false;
+    return is_winning_run_stage(static_cast<int>(blackboard->getf("selected_stage", 1.0f)));
 }
 
 static float sound_volume_gain(const NeneBlackboard& blackboard, const char* key) {
@@ -148,6 +165,205 @@ static void apply_game_settings(NeneBlackboard& blackboard) {
     apply_dino_control_setting(blackboard);
 }
 
+static Uint8 alpha_byte(float alpha) {
+    alpha = std::clamp(alpha, 0.0f, 1.0f);
+    return static_cast<Uint8>(std::round(alpha * 255.0f));
+}
+
+static std::shared_ptr<SDL_Surface> make_surface_ptr(SDL_Surface* surface) {
+    return std::shared_ptr<SDL_Surface>(surface, [](SDL_Surface* p) {
+        if (p) SDL_DestroySurface(p);
+    });
+}
+
+static std::mutex& ttf_preload_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static void add_texture_asset_task(NeneTaskGroup& tasks,
+                                   const std::shared_ptr<NeneTaskServer>& task_server,
+                                   const std::shared_ptr<NeneImageLoader>& asset_loader,
+                                   std::string label,
+                                   std::string path) {
+    if (!asset_loader || path.empty()) return;
+    if (!task_server) {
+        asset_loader->get_texture(path);
+        return;
+    }
+
+    auto surface = std::make_shared<std::shared_ptr<SDL_Surface>>();
+    tasks.add(task_server->submit(
+        std::string("texture decode: ") + label,
+        [surface, path](NeneTaskContext& ctx) {
+            ctx.throw_if_stop_requested();
+            SDL_Surface* raw = IMG_Load(path.c_str());
+            if (!raw) {
+                throw std::runtime_error(std::string("IMG_Load failed: ") + SDL_GetError());
+            }
+            *surface = make_surface_ptr(raw);
+            ctx.set_progress(1.0f);
+        },
+        [asset_loader, path, surface] {
+            asset_loader->get_texture_from_surface(path, surface->get());
+            surface->reset();
+        }));
+}
+
+static void add_text_asset_task(NeneTaskGroup& tasks,
+                                const std::shared_ptr<NeneTaskServer>& task_server,
+                                const std::shared_ptr<NeneFontLoader>& font_loader,
+                                std::string font_path,
+                                std::string text,
+                                int size,
+                                SDL_Color color) {
+    if (!font_loader || font_path.empty() || text.empty()) return;
+    if (!task_server) {
+        font_loader->get_text_texture(font_path, size, text, color);
+        return;
+    }
+
+    auto surface = std::make_shared<std::shared_ptr<SDL_Surface>>();
+    tasks.add(task_server->submit(
+        std::string("text surface: ") + text,
+        [surface, font_path, text, size, color](NeneTaskContext& ctx) {
+            ctx.throw_if_stop_requested();
+            std::lock_guard<std::mutex> lock(ttf_preload_mutex());
+            TTF_Font* font = TTF_OpenFont(font_path.c_str(), size);
+            if (!font) {
+                throw std::runtime_error(std::string("TTF_OpenFont failed: ") + SDL_GetError());
+            }
+            SDL_Surface* raw = TTF_RenderText_Blended(font, text.c_str(), 0, color);
+            TTF_CloseFont(font);
+            if (!raw) {
+                throw std::runtime_error(std::string("TTF_RenderText_Blended failed: ") + SDL_GetError());
+            }
+            *surface = make_surface_ptr(raw);
+            ctx.set_progress(1.0f);
+        },
+        [font_loader, font_path, text, size, color, surface] {
+            font_loader->get_text_texture_from_surface(font_path, size, text, color, surface->get());
+            surface->reset();
+        }));
+}
+
+static void add_audio_asset_task(NeneTaskGroup& tasks,
+                                 const std::shared_ptr<NeneTaskServer>& task_server,
+                                 const std::shared_ptr<NeneSoundLoader>& sound_loader,
+                                 std::string path) {
+    if (!sound_loader || path.empty()) return;
+    if (!task_server) {
+        sound_loader->preload(path);
+        return;
+    }
+    tasks.add(task_server->submit(
+        std::string("audio: ") + path,
+        [sound_loader, path = std::move(path)](NeneTaskContext& ctx) {
+            ctx.throw_if_stop_requested();
+            sound_loader->preload(path);
+            ctx.set_progress(1.0f);
+        }));
+}
+
+static void submit_super_chrome_dino_asset_tasks(
+    NeneTaskGroup& tasks,
+    const std::shared_ptr<NeneTaskServer>& task_server,
+    const std::shared_ptr<NeneImageLoader>& asset_loader,
+    const std::shared_ptr<NeneFontLoader>& font_loader,
+    const std::shared_ptr<NeneSoundLoader>& sound_loader,
+    const std::shared_ptr<PathService>& path_service) {
+    if (!asset_loader || !font_loader || !path_service) {
+        throw std::runtime_error("submit_super_chrome_dino_asset_tasks: services not ready");
+    }
+
+    const std::vector<std::string> texture_paths = {
+        kSpriteSheetPath,
+        "assets/ui/GoogleFontsIcons/lock_40dp_FFFFFF_FILL0_wght400_GRAD0_opsz40.png",
+        "assets/ui/GoogleFontsIcons/check_40dp_FFFFFF_FILL0_wght400_GRAD0_opsz40.png",
+        "assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_up.png",
+        "assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_down.png",
+        "assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_left.png",
+        "assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_arrow_right.png",
+        "assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_space_icon.png",
+        "assets/ui/kenney_input-prompts_1.5/Keyboard & Mouse/Default/keyboard_escape.png",
+    };
+
+    for (const auto& rel_path : texture_paths) {
+        const std::string path = path_service->resolve(rel_path);
+        add_texture_asset_task(
+            tasks,
+            task_server,
+            asset_loader,
+            rel_path,
+            path);
+    }
+
+    const std::vector<std::string> audio_paths = {
+        kSeCursorMovePath,
+        kSeConfirmPath,
+        kSeDinoJumpPath,
+        kStageBgmPaths[0],
+        kStageBgmPaths[1],
+        kStageBgmPaths[2],
+    };
+    for (const auto& rel_path : audio_paths) {
+        add_audio_asset_task(tasks, task_server, sound_loader, path_service->resolve(rel_path));
+    }
+
+    const std::string font_path = path_service->resolve(kGameFontPath);
+    auto add_text = [&](std::string text, int size, SDL_Color color) {
+        add_text_asset_task(
+            tasks,
+            task_server,
+            font_loader,
+            font_path,
+            std::move(text),
+            size,
+            color);
+    };
+    auto add_text_pair = [&](const std::string& text, int size) {
+        add_text(text, size, SDL_Color{255, 255, 255, 255});
+        add_text(text, size, SDL_Color{160, 160, 160, 255});
+    };
+
+    add_text("SuperChromeDino", 56, SDL_Color{255, 255, 255, 255});
+    add_text("Continue", 32, SDL_Color{255, 255, 255, 255});
+    add_text("Continue", 32, SDL_Color{150, 150, 150, 255});
+    add_text("New Game", 32, SDL_Color{255, 255, 255, 255});
+    add_text("Settings", 32, SDL_Color{255, 255, 255, 255});
+    add_text("Quit Game", 32, SDL_Color{255, 255, 255, 255});
+    add_text("Select", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Confirm", 24, SDL_Color{255, 255, 255, 255});
+
+    add_text("Game Over", 64, SDL_Color{255, 255, 255, 255});
+    add_text("Stage Clear", 64, SDL_Color{255, 255, 255, 255});
+    add_text("Paused", 64, SDL_Color{255, 255, 255, 255});
+    add_text("Press Space to Restart", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Press Space to Stage Select", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Press Enter to Restart", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Press Enter to Stage Select", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Press P to Resume", 24, SDL_Color{255, 255, 255, 255});
+    add_text("00000", 28, SDL_Color{255, 255, 255, 255});
+
+    add_text("Settings", 40, SDL_Color{255, 255, 255, 255});
+    add_text("Select Option", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Change Option", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Return to Title", 24, SDL_Color{255, 255, 255, 255});
+    add_text("Saved!", 24, SDL_Color{255, 255, 255, 255});
+    for (const auto& text : {
+        "FPS", "SE Volume", "BGM Volume", "Cursor in Window", "Dino Control",
+        "60", "30", "Show", "Hide", "Arrows", "+ Space", "WASD", "+ Enter",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    }) {
+        add_text_pair(text, 28);
+    }
+
+    add_text("Stage Select", 40, SDL_Color{255, 255, 255, 255});
+    add_text("1", 44, SDL_Color{255, 255, 255, 255});
+    add_text("2", 44, SDL_Color{255, 255, 255, 255});
+    add_text("3", 44, SDL_Color{255, 255, 255, 255});
+}
+
 // 恐竜
 class Dino final : public NeneNode {
 public:
@@ -181,6 +397,8 @@ protected:
         anim_idx_ = 0;
         facing_dir_ = 1;
         dead_ = false;
+        winning_run_ = is_winning_run_stage(blackboard.get());
+        star_accum_ = 0.0f;
         register_colliders_();
     }
     // 内部入力
@@ -209,6 +427,7 @@ protected:
             anim_accum_ = 0.0f;
             anim_idx_ = 0;
         }
+        if (winning_run_) star_accum_ += dt;
         // ジャンプ中なら物理演算に従って座標を更新し続ける
         vy_ += blackboard->gravity * dt;
         y_  += vy_ * dt;
@@ -228,11 +447,13 @@ protected:
         if (!sprite_tex_) return;
         const SDL_FRect* src = (!on_ground_) ? &jump_src_ : &run_src_[anim_idx_];
         SDL_FRect dst { x_, y_, w_, h_ };
+        if (winning_run_) apply_star_tint_();
         if (facing_dir_ < 0) {
             SDL_RenderTextureRotated(r, sprite_tex_, src, &dst, 0.0, nullptr, SDL_FLIP_HORIZONTAL);
         } else {
             SDL_RenderTexture(r, sprite_tex_, src, &dst);
         }
+        if (winning_run_) SDL_SetTextureColorMod(sprite_tex_, 255, 255, 255);
         // コライダー可視化
         if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
             if (collision_world) {
@@ -248,10 +469,22 @@ private:
     using Vertices = std::vector<SDL_FPoint>;
 
     void try_jump_() {
+        if (winning_run_) return;
         if (!on_ground_) return;
         on_ground_ = false;
         vy_ = -jump_speed_;
         play_sound_effect(sound_loader, path_service, blackboard, kSeDinoJumpPath);
+    }
+    void apply_star_tint_() {
+        const float phase = star_accum_ * 8.0f;
+        const auto channel = [](float p) -> Uint8 {
+            return static_cast<Uint8>(std::round(205.0f + 50.0f * (0.5f + 0.5f * std::sin(p))));
+        };
+        SDL_SetTextureColorMod(
+            sprite_tex_,
+            channel(phase),
+            channel(phase + 2.1f),
+            channel(phase + 4.2f));
     }
     static Vertices rect_(float x, float y, float rw, float rh) {
         return Vertices{
@@ -373,9 +606,11 @@ private:
     float vy_ = 0.0f;
     bool  on_ground_ = true;
     bool  dead_ = false;
+    bool  winning_run_ = false;
     int   facing_dir_ = 1;
     // アニメーション設定
     float anim_accum_ = 0.0f;
+    float star_accum_ = 0.0f;
     int   anim_idx_ = 0;
     // 運動設定
     float jump_speed_    = 900.0f;
@@ -494,13 +729,23 @@ protected:
         poly.debug_alpha = 0.25f;
         // コライダー登録
         collider_id_ = collision_world->add_collider(std::move(poly));
+        winning_run_ = is_winning_run_stage(blackboard.get());
+        knocked_down_ = false;
+        knock_angle_ = 0.0f;
     }
     void handle_time_lapse(const float& dt) override {
         if (!blackboard) return;
         const float speed = blackboard->getf("world_scroll_speed", 0.0f);
         x_ -= speed * dt;
+        if (knocked_down_) {
+            knock_angle_ = std::min(90.0f, knock_angle_ + knock_rotation_speed_ * dt);
+            x_ -= knock_slide_speed_ * dt;
+        }
         if (collision_world && collider_id_ != 0) {
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
+        }
+        if (winning_run_ && !knocked_down_) {
+            try_knock_down_on_dino_collision_();
         }
         if (x_ + w_ < -despawn_margin_
             || x_ > static_cast<float>(blackboard->window_w) + spawn_margin_ + despawn_margin_) {
@@ -510,7 +755,12 @@ protected:
     void render(SDL_Renderer* r) override {
         if (!r || !sprite_tex_) return;
         SDL_FRect dst{ x_, y_, w_, h_ };
-        SDL_RenderTexture(r, sprite_tex_, &src_, &dst);
+        if (knocked_down_) {
+            SDL_FPoint pivot{ w_ * 0.5f, h_ };
+            SDL_RenderTextureRotated(r, sprite_tex_, &src_, &dst, knock_angle_, &pivot, SDL_FLIP_NONE);
+        } else {
+            SDL_RenderTexture(r, sprite_tex_, &src_, &dst);
+        }
         // コライダー可視化
         if (blackboard && blackboard->getf("show_hitbox", 0.0f) > 0.5f) {
             if (collision_world && collider_id_ != 0) {
@@ -521,6 +771,23 @@ protected:
         }
     }
 private:
+    void try_knock_down_on_dino_collision_() {
+        if (!collision_world || collider_id_ == 0) return;
+        auto* self = collision_world->find(collider_id_);
+        if (!self || !self->enabled) return;
+        auto hit = collision_world->detect_collision(*self);
+        if (!hit) return;
+        if (hit->get().owner_name != "dino") return;
+        knock_down_();
+    }
+    void knock_down_() {
+        knocked_down_ = true;
+        knock_angle_ = 0.0f;
+        x_ -= 10.0f;
+        if (collision_world && collider_id_ != 0) {
+            collision_world->set_enabled(collider_id_, false);
+        }
+    }
     static constexpr std::uint32_t kLayerPlayer   = 1u << 0;
     static constexpr std::uint32_t kLayerObstacle = 1u << 1;
     static constexpr std::uint32_t kMaskObstacleHits = kLayerPlayer;
@@ -530,6 +797,11 @@ private:
     float x_ = 0.0f, y_ = 0.0f, w_ = 0.0f, h_ = 0.0f;
     float spawn_margin_ = 40.0f;
     float despawn_margin_ = 60.0f;
+    bool winning_run_ = false;
+    bool knocked_down_ = false;
+    float knock_angle_ = 0.0f;
+    float knock_slide_speed_ = 140.0f;
+    float knock_rotation_speed_ = 360.0f;
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 };
 
@@ -565,8 +837,9 @@ protected:
         );
         spawn_accum_ = 0.0f;
         obstacle_seq_ = 0;
-        // 最初の出現までの時間（0.8〜1.6秒）
-        next_spawn_in_ = frand_(0.8f, 1.6f);
+        winning_run_ = is_winning_run_stage(blackboard.get());
+        // 最初の出現までの時間（ステージ3は短め）
+        next_spawn_in_ = winning_run_ ? frand_(0.25f, 0.65f) : frand_(0.8f, 1.6f);
     }
     void handle_time_lapse(const float& dt) override {
         const float speed = blackboard ? blackboard->getf("world_scroll_speed", 0.0f) : 0.0f;
@@ -578,8 +851,8 @@ protected:
         if (spawn_accum_ >= next_spawn_in_) {
             spawn_accum_ = 0.0f;
             spawn_obstacle_();
-            // 次の間隔をランダムに（0.7〜1.7秒）
-            next_spawn_in_ = frand_(0.7f, 1.7f);
+            // 次の間隔をランダムに（ステージ3は短め）
+            next_spawn_in_ = winning_run_ ? frand_(0.35f, 0.85f) : frand_(0.7f, 1.7f);
         }
     }
     void handle_nene_mail(const NeneMail& mail) override {
@@ -603,6 +876,7 @@ private:
     float spawn_interval_ = 1.35f;
     int obstacle_seq_ = 0;
     float next_spawn_in_ = 1.0f;
+    bool winning_run_ = false;
 };
 
 // プテラノドン
@@ -804,7 +1078,12 @@ protected:
             const bool dash = input_server && input_server->is_down("dash");
             const int move_dir = (move_right ? 1 : 0) - (move_left ? 1 : 0);
             const float dash_mul = dash ? 1.8f : 1.0f;
-            const float speed = static_cast<float>(move_dir) * blackboard->scroll_speed * dash_mul;
+            float speed = static_cast<float>(move_dir) * blackboard->scroll_speed * dash_mul;
+            if (is_winning_run_stage(blackboard.get())) {
+                float run_mul = move_right ? 1.35f : 1.0f;
+                if (move_left && !move_right) run_mul = 0.55f;
+                speed = blackboard->scroll_speed * run_mul * dash_mul;
+            }
             blackboard->setf("world_scroll_speed", speed);
             float& score = blackboard->ensuref("score", 0.0f);
             if (speed > 0.0f) score += dt * 100.0f; // 右へ進んだ時間を得点化
@@ -822,6 +1101,7 @@ protected:
         // Referee のブロードキャストを受けた時
         if (mail.subject == "collision_detected") {
             if (blackboard && blackboard->getf("stage_clear", 0.0f) > 0.5f) return;
+            if (is_winning_run_stage(blackboard.get())) return;
             // World 以下の time_lapse, sdl_event パルスを遮断
             this->valve_time_lapse = false;
             this->valve_sdl_event = false;
@@ -845,6 +1125,8 @@ protected:
         // 固定テキストは一度だけ作ればOK
         game_over_tex_ = font_loader->get_text_texture(font_path_, 64, "Game Over", SDL_Color{255,255,255,255});
         stage_clear_tex_ = font_loader->get_text_texture(font_path_, 64, "Stage Clear", SDL_Color{255,255,255,255});
+        paused_tex_ = font_loader->get_text_texture(font_path_, 64, "Paused", SDL_Color{255,255,255,255});
+        pause_prompt_tex_ = font_loader->get_text_texture(font_path_, 24, "Press P to Resume", SDL_Color{255,255,255,255});
         const std::string confirm_key = dino_confirm_key_name(*blackboard);
         restart_tex_ = font_loader->get_text_texture(font_path_, 24, "Press " + confirm_key + " to Restart", SDL_Color{255,255,255,255});
         stage_select_tex_ = font_loader->get_text_texture(font_path_, 24, "Press " + confirm_key + " to Stage Select", SDL_Color{255,255,255,255});
@@ -898,6 +1180,11 @@ protected:
         SDL_RenderTexture(r, score_tex_, nullptr, &score_dst);
         const bool game_over = (blackboard->getf("game_over", 0.0f) > 0.5f);
         const bool stage_clear = (blackboard->getf("stage_clear", 0.0f) > 0.5f);
+        const bool paused = (blackboard->getf(kFlagPaused, 0.0f) > 0.5f);
+        if (paused && !game_over && !stage_clear) {
+            render_pause_(r, static_cast<float>(w), static_cast<float>(h));
+            return;
+        }
         if (!game_over && !stage_clear) return;
         SDL_Texture* message_tex = game_over ? game_over_tex_ : stage_clear_tex_;
         SDL_Texture* prompt_tex = game_over ? restart_tex_ : stage_select_tex_;
@@ -943,12 +1230,29 @@ private:
         score_tex_ = font_loader->get_text_texture(
             font_path_, 28, s, SDL_Color{255,255,255,255});
     }
+    void render_pause_(SDL_Renderer* r, float w, float h) const {
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
+        const SDL_FRect veil{ 0.0f, 0.0f, w, h };
+        SDL_RenderFillRect(r, &veil);
+        render_texture_centered_(r, paused_tex_, w * 0.5f, h * 0.5f - 34.0f);
+        render_texture_centered_(r, pause_prompt_tex_, w * 0.5f, h * 0.5f + 36.0f);
+    }
+    static void render_texture_centered_(SDL_Renderer* r, SDL_Texture* tex, float cx, float cy) {
+        if (!tex) return;
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        const SDL_FRect dst{ cx - tw * 0.5f, cy - th * 0.5f, tw, th };
+        SDL_RenderTexture(r, tex, nullptr, &dst);
+    }
     std::string font_path_;
     SDL_Texture* score_tex_ = nullptr;
     SDL_Texture* game_over_tex_ = nullptr;
     SDL_Texture* restart_tex_ = nullptr;
     SDL_Texture* stage_clear_tex_ = nullptr;
     SDL_Texture* stage_select_tex_ = nullptr;
+    SDL_Texture* paused_tex_ = nullptr;
+    SDL_Texture* pause_prompt_tex_ = nullptr;
     int last_score_int_ = 0;
     float blink_accum_ = 0.0f;
     bool  press_visible_ = true;
@@ -970,6 +1274,7 @@ protected:
             blackboard->setf("score", 0.0f);
             blackboard->setf("game_over", 0.0f);
             blackboard->setf("stage_clear", 0.0f);
+            blackboard->setf(kFlagPaused, 0.0f);
             blackboard->setf("world_scroll_speed", 0.0f);
             // コライダー可視化
             blackboard->setf("show_hitbox", 1.0f);
@@ -982,6 +1287,13 @@ protected:
         add_child(std::make_unique<World>("world"));
         add_child(std::make_unique<Overlay>("overlay"));
     }
+    void handle_sdl_event(const SDL_Event& ev) override {
+        if (ev.type != SDL_EVENT_KEY_DOWN) return;
+        if (ev.key.repeat) return;
+        if (ev.key.key != SDLK_P) return;
+        if (is_finished_()) return;
+        set_paused_(!paused_);
+    }
     void handle_nene_mail(const NeneMail& mail) override {
         if (mail.subject != "stage_cleared") return;
         if (stage_clear_saved_) return;
@@ -993,6 +1305,23 @@ private:
         if (!sound_loader || !path_service) return;
         if (blackboard) apply_sound_settings(*sound_loader, *blackboard);
         sound_loader->play_bgm(path_service->resolve(stage_bgm_path(stage_)));
+    }
+    bool is_finished_() const {
+        if (!blackboard) return false;
+        return blackboard->getf("game_over", 0.0f) > 0.5f
+            || blackboard->getf("stage_clear", 0.0f) > 0.5f;
+    }
+    void set_paused_(bool paused) {
+        paused_ = paused;
+        if (blackboard) {
+            blackboard->setf(kFlagPaused, paused ? 1.0f : 0.0f);
+            if (paused) blackboard->setf("world_scroll_speed", 0.0f);
+        }
+        auto it = children.find("world");
+        if (it == children.end() || !it->second) return;
+        it->second->set_valve_sdl_event(!paused);
+        it->second->set_valve_nene_input(!paused);
+        it->second->set_valve_time_lapse(!paused);
     }
     void save_stage_clear_() {
         if (!blackboard) return;
@@ -1024,7 +1353,99 @@ private:
         }
     }
     int stage_ = 1;
+    bool paused_ = false;
     bool stage_clear_saved_ = false;
+};
+
+// 起動時スプラッシュ
+class SplashScene final : public NeneNode {
+public:
+    explicit SplashScene(std::string name) : NeneNode(std::move(name)) {}
+protected:
+    void init_node() override {
+        if (!asset_loader || !path_service) {
+            nnthrow("services not ready (asset_loader/path_service)");
+        }
+
+        splash_tex_ = asset_loader->get_texture(path_service->resolve(kSplashImagePath));
+        if (!splash_tex_) nnthrow("failed to load splash texture");
+        SDL_SetTextureBlendMode(splash_tex_, SDL_BLENDMODE_BLEND);
+
+        submit_super_chrome_dino_asset_tasks(
+            tasks_, task_server, asset_loader, font_loader, sound_loader, path_service);
+    }
+
+    void handle_time_lapse(const float& dt) override {
+        switch (phase_) {
+            case Phase::FadeIn:
+                alpha_ += dt / kFadeInSec;
+                if (alpha_ >= 1.0f) {
+                    alpha_ = 1.0f;
+                    phase_ = Phase::Hold;
+                }
+                break;
+            case Phase::Hold:
+                alpha_ = 1.0f;
+                if (tasks_.all_done()) {
+                    report_task_errors_();
+                    phase_ = Phase::FadeOut;
+                }
+                break;
+            case Phase::FadeOut:
+                alpha_ -= dt / kFadeOutSec;
+                if (alpha_ <= 0.0f) {
+                    alpha_ = 0.0f;
+                    phase_ = Phase::Done;
+                    send_mail(NeneMail("scene_switch", this->name, "switch_to", "title_scene"));
+                }
+                break;
+            case Phase::Done:
+                break;
+        }
+    }
+
+    void render(SDL_Renderer* r) override {
+        if (!r || !splash_tex_) return;
+
+        int w = 0, h = 0;
+        if (!SDL_GetRenderOutputSize(r, &w, &h)) return;
+        float tw = 0.0f, th = 0.0f;
+        if (!SDL_GetTextureSize(splash_tex_, &tw, &th)) return;
+        if (tw <= 0.0f || th <= 0.0f) return;
+
+        const float ww = static_cast<float>(w);
+        const float wh = static_cast<float>(h);
+        const float scale = std::min(ww / tw, wh / th);
+        const float dw = tw * scale;
+        const float dh = th * scale;
+        const SDL_FRect dst{ (ww - dw) * 0.5f, (wh - dh) * 0.5f, dw, dh };
+
+        SDL_SetTextureAlphaMod(splash_tex_, alpha_byte(alpha_));
+        SDL_RenderTexture(r, splash_tex_, nullptr, &dst);
+    }
+private:
+    enum class Phase {
+        FadeIn,
+        Hold,
+        FadeOut,
+        Done,
+    };
+
+    void report_task_errors_() {
+        if (reported_task_errors_) return;
+        reported_task_errors_ = true;
+        if (tasks_.any_failed()) {
+            nnerr(std::string("asset preload failed: ") + tasks_.first_error());
+        }
+    }
+
+    static constexpr float kFadeInSec = 0.8f;
+    static constexpr float kFadeOutSec = 0.45f;
+    SDL_Texture* splash_tex_ = nullptr;
+    NeneTaskGroup tasks_;
+    Phase phase_ = Phase::FadeIn;
+    float alpha_ = 0.0f;
+    bool reported_task_errors_ = false;
 };
 
 // タイトルシーン
@@ -1799,6 +2220,9 @@ public:
     explicit SceneSwitch(std::string name) : NeneSwitch(std::move(name)) {}
 protected:
     void init_node() override {
+        register_node("splash_scene", [] {
+            return std::make_unique<SplashScene>("splash_scene");
+        });
         register_node("title_scene", [] {
             return std::make_unique<TitleScene>("title_scene");
         });
@@ -1814,7 +2238,7 @@ protected:
                 return std::make_unique<PlayScene>(scene_name, stage);
             });
         }
-        set_initial_node("title_scene");
+        set_initial_node("splash_scene");
     }
 };
 
@@ -1845,7 +2269,7 @@ protected:
     }
 private:
     static const std::string& icon_path() {
-        static std::string p = PathService::resolve_base("assets/icons/T-Rex.svg");
+        static std::string p = PathService::resolve_base("assets/T-Rex.svg");
         return p;
     }
 };
