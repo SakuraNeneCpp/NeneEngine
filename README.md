@@ -38,6 +38,8 @@
 
 
 ## TODO
+- AGENTS.mdのgit commitのルールをAIと相談して決める.
+- リファクタリング.
 - アニメーション実装のサポート -> NeneAnimatorの設計・実装
 - 汎用ステートマシンの活用 -> NeneStateMachine
 - SuperChromeDino
