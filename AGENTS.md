@@ -51,3 +51,8 @@
 - `NeneBlackboard` の保存対象はユーザー設定レイヤーだけにする. `fps`, ウィンドウ位置/サイズ, `input_maps`, `mark_persistentf()` 済みの float は保存してよいが, `score`, `game_over`, `world_scroll_speed` など実行中の状態を丸ごと保存しない.
 - デフォルト入力マップは `set_default_input_map()` で未設定時だけ登録し, 保存済みのキーコンフィグを `clear_input_map()` で上書きしない.
 - `NeneRoot` は save service がある場合, 既定で `_settings` スロットから Blackboard settings を起動前に読み込み, 終了時に保存する. 不要なゲームでは `set_auto_blackboard_settings(false)` で止める.
+
+### NeneTask
+- フレーム超過しそうな処理は `NeneTaskServer` の worker 側で行い, `NeneNode` ツリー, `NeneBlackboard`, SDL renderer/texture/window などのメインスレッド資源の変更は commit 側に閉じ込める.
+- commit は `NeneRoot` のメインループ内で予算付きに実行されるため, 1つの commit に重い処理を詰め込まず, 大きな反映は複数タスクや複数フレームへ分割する.
+- シーンやノードが task を所有する場合は `NeneTaskGroup` などで handle を保持し, 破棄時に未完了 task を cancel して, 破棄済みノードを commit が触らないようにする.

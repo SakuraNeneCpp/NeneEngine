@@ -241,6 +241,7 @@ void NeneNode::add_child(std::unique_ptr<NeneNode> child) {
     child->font_loader  = this->font_loader;
     child->sound_loader = this->sound_loader;
     child->path_service = this->path_service;
+    child->task_server  = this->task_server;
     child->save_service = this->save_service;
     child->blackboard = this->blackboard;
     child->collision_world = this->collision_world;
@@ -312,6 +313,7 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
     this->font_loader     = std::make_shared<NeneFontLoader>(renderer);
     this->sound_loader    = std::make_shared<NeneSoundLoader>();
     this->path_service    = std::make_shared<PathService>();
+    this->task_server     = std::make_shared<NeneTaskServer>();
     this->blackboard = std::make_shared<NeneBlackboard>();
     if (this->blackboard) {
         this->blackboard->root_name = this->name;
@@ -324,7 +326,12 @@ NeneRoot::NeneRoot(std::string node_name, const char* title, int w, int h, Uint3
 }
 
 NeneRoot::~NeneRoot() {
+    if (task_server) {
+        task_server->request_stop_all();
+        task_server->wait_worker_idle();
+    }
     clear_children();
+    task_server.reset();
     sound_loader.reset();
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
@@ -412,6 +419,10 @@ int NeneRoot::run() {
             while (input_server->pull(input)) {
                 pulse_nene_input(input);
             }
+        }
+        // ワーカーで終わった処理の反映だけを、メインスレッドで予算付き実行
+        if (task_server) {
+            task_server->pump_main_thread(task_commit_budget_ms_);
         }
         // 時間経過
         Uint64 now_ticks = SDL_GetTicks();

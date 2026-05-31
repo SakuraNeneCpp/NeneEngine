@@ -8,12 +8,17 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
+#include <exception>
 #include <vector>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <functional>
 #include <utility>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -707,6 +712,147 @@ private:
     std::deque<NeneMail> mail_queue_;
 };
 
+// NeneTask
+// メインループを止めたくない重い処理をワーカースレッドへ逃がし、
+// 結果の反映だけをメインスレッドで少しずつ実行する。
+enum class NeneTaskStatus : std::uint8_t {
+    Queued,
+    Running,
+    WaitingCommit,
+    Succeeded,
+    Failed,
+    Canceled,
+};
+
+const char* nene_task_status_name(NeneTaskStatus status);
+
+class NeneTaskCanceled : public std::exception {
+public:
+    const char* what() const noexcept override { return "NeneTask canceled"; }
+};
+
+class NeneTaskState;
+
+class NeneTaskContext {
+public:
+    bool stop_requested() const;
+    void throw_if_stop_requested() const;
+    void set_progress(float progress, std::string message = {});
+private:
+    friend class NeneTaskServer;
+    NeneTaskContext(std::stop_token stop_token, std::shared_ptr<NeneTaskState> state);
+
+    std::stop_token stop_token_;
+    std::weak_ptr<NeneTaskState> state_;
+};
+
+class NeneTaskHandle {
+public:
+    NeneTaskHandle() = default;
+
+    bool valid() const { return state_ != nullptr; }
+    std::uint64_t id() const;
+    std::string name() const;
+    NeneTaskStatus status() const;
+    float progress() const;
+    std::string message() const;
+    std::string error() const;
+    bool stop_requested() const;
+    bool done() const;
+    bool succeeded() const;
+    bool failed() const;
+    bool canceled() const;
+    void cancel() const;
+private:
+    friend class NeneTaskServer;
+    explicit NeneTaskHandle(std::shared_ptr<NeneTaskState> state);
+
+    std::shared_ptr<NeneTaskState> state_;
+};
+
+class NeneTaskServer {
+public:
+    using Worker = std::function<void(NeneTaskContext&)>;
+    using MainThreadCommit = std::function<void()>;
+
+    explicit NeneTaskServer(std::size_t worker_count = 0);
+    ~NeneTaskServer();
+    NeneTaskServer(const NeneTaskServer&) = delete;
+    NeneTaskServer& operator=(const NeneTaskServer&) = delete;
+
+    NeneTaskHandle submit(std::string name, Worker worker,
+                          MainThreadCommit commit = {});
+
+    template <class Result, class WorkerFn, class CommitFn>
+    NeneTaskHandle submit_result(std::string name, WorkerFn&& worker,
+                                 CommitFn&& commit) {
+        auto result = std::make_shared<std::optional<Result>>();
+        return submit(
+            std::move(name),
+            [result, worker_fn = std::forward<WorkerFn>(worker)](NeneTaskContext& ctx) mutable {
+                result->emplace(worker_fn(ctx));
+            },
+            [result, commit_fn = std::forward<CommitFn>(commit)]() mutable {
+                if (!result->has_value()) {
+                    throw std::runtime_error("NeneTaskServer: result is empty");
+                }
+                commit_fn(std::move(result->value()));
+                result->reset();
+            });
+    }
+
+    std::size_t pump_main_thread(double budget_ms = 2.0);
+    void request_stop_all();
+    void wait_worker_idle();
+    std::size_t queued_count() const;
+    std::size_t running_count() const;
+    std::size_t ready_count() const;
+    std::size_t unfinished_count() const;
+    bool has_unfinished_tasks() const { return unfinished_count() > 0; }
+private:
+    class Job {
+    public:
+        std::shared_ptr<NeneTaskState> state;
+        Worker worker;
+        MainThreadCommit commit;
+    };
+
+    static std::size_t default_worker_count_();
+    void worker_loop_(std::stop_token stop_token);
+    void mark_canceled_(const std::shared_ptr<NeneTaskState>& state);
+    void mark_failed_(const std::shared_ptr<NeneTaskState>& state, std::string error);
+    void mark_succeeded_(const std::shared_ptr<NeneTaskState>& state);
+    void mark_waiting_commit_(const std::shared_ptr<NeneTaskState>& state);
+    bool should_cancel_(const std::shared_ptr<NeneTaskState>& state) const;
+
+    std::uint64_t next_id_ = 1;
+    bool stopping_ = false;
+    std::size_t running_count_ = 0;
+    std::deque<Job> queued_;
+    std::deque<Job> ready_;
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::condition_variable finished_cv_;
+    std::vector<std::jthread> workers_;
+};
+
+class NeneTaskGroup {
+public:
+    ~NeneTaskGroup();
+    void add(NeneTaskHandle handle);
+    void clear();
+    void cancel_all();
+    bool empty() const { return handles_.empty(); }
+    bool all_done() const;
+    bool any_failed() const;
+    bool all_succeeded() const;
+    float progress() const;
+    std::string first_error() const;
+    std::size_t size() const { return handles_.size(); }
+private:
+    std::vector<NeneTaskHandle> handles_;
+};
+
 
 // NeneImageLoader
 class NeneImageLoader {
@@ -814,6 +960,7 @@ private:
     float se_volume_ = 1.0f;
     float bgm_volume_ = 1.0f;
     float bgm_gain_ = 1.0f;
+    mutable std::mutex cache_mutex_;
     bool mixer_initialized_ = false;
 #ifdef _WIN32
     bool media_foundation_started_ = false;

@@ -275,6 +275,426 @@ NeneDecodedPcm_ nene_sound_decode_media_foundation_(const std::string& path) {
 #endif
 }
 
+// NeneTask
+class NeneTaskState {
+public:
+    std::uint64_t id = 0;
+    std::string name;
+    mutable std::mutex mutex;
+    NeneTaskStatus status = NeneTaskStatus::Queued;
+    float progress = 0.0f;
+    std::string message;
+    std::string error;
+    bool cancel_requested = false;
+};
+
+static bool nene_task_status_done_(NeneTaskStatus status) {
+    return status == NeneTaskStatus::Succeeded
+        || status == NeneTaskStatus::Failed
+        || status == NeneTaskStatus::Canceled;
+}
+
+const char* nene_task_status_name(NeneTaskStatus status) {
+    switch (status) {
+        case NeneTaskStatus::Queued:        return "queued";
+        case NeneTaskStatus::Running:       return "running";
+        case NeneTaskStatus::WaitingCommit: return "waiting_commit";
+        case NeneTaskStatus::Succeeded:     return "succeeded";
+        case NeneTaskStatus::Failed:        return "failed";
+        case NeneTaskStatus::Canceled:      return "canceled";
+        default:                            return "unknown";
+    }
+}
+
+NeneTaskContext::NeneTaskContext(std::stop_token stop_token,
+                                 std::shared_ptr<NeneTaskState> state)
+    : stop_token_(std::move(stop_token)), state_(std::move(state)) {}
+
+bool NeneTaskContext::stop_requested() const {
+    if (stop_token_.stop_requested()) return true;
+    auto state = state_.lock();
+    if (!state) return true;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    return state->cancel_requested;
+}
+
+void NeneTaskContext::throw_if_stop_requested() const {
+    if (stop_requested()) throw NeneTaskCanceled();
+}
+
+void NeneTaskContext::set_progress(float progress, std::string message) {
+    auto state = state_.lock();
+    if (!state) return;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->progress = std::clamp(progress, 0.0f, 1.0f);
+    state->message = std::move(message);
+}
+
+NeneTaskHandle::NeneTaskHandle(std::shared_ptr<NeneTaskState> state)
+    : state_(std::move(state)) {}
+
+std::uint64_t NeneTaskHandle::id() const {
+    if (!state_) return 0;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->id;
+}
+
+std::string NeneTaskHandle::name() const {
+    if (!state_) return "";
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->name;
+}
+
+NeneTaskStatus NeneTaskHandle::status() const {
+    if (!state_) return NeneTaskStatus::Canceled;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->status;
+}
+
+float NeneTaskHandle::progress() const {
+    if (!state_) return 0.0f;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->progress;
+}
+
+std::string NeneTaskHandle::message() const {
+    if (!state_) return "";
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->message;
+}
+
+std::string NeneTaskHandle::error() const {
+    if (!state_) return "";
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->error;
+}
+
+bool NeneTaskHandle::stop_requested() const {
+    if (!state_) return true;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->cancel_requested;
+}
+
+bool NeneTaskHandle::done() const {
+    return nene_task_status_done_(status());
+}
+
+bool NeneTaskHandle::succeeded() const {
+    return status() == NeneTaskStatus::Succeeded;
+}
+
+bool NeneTaskHandle::failed() const {
+    return status() == NeneTaskStatus::Failed;
+}
+
+bool NeneTaskHandle::canceled() const {
+    return status() == NeneTaskStatus::Canceled;
+}
+
+void NeneTaskHandle::cancel() const {
+    if (!state_) return;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (nene_task_status_done_(state_->status)) return;
+    state_->cancel_requested = true;
+}
+
+std::size_t NeneTaskServer::default_worker_count_() {
+    const unsigned int hardware = std::thread::hardware_concurrency();
+    if (hardware <= 1) return 1;
+    return static_cast<std::size_t>(std::min<unsigned int>(hardware - 1, 4));
+}
+
+NeneTaskServer::NeneTaskServer(std::size_t worker_count) {
+    const std::size_t count = (worker_count == 0) ? default_worker_count_() : worker_count;
+    workers_.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        workers_.emplace_back([this](std::stop_token stop_token) {
+            worker_loop_(stop_token);
+        });
+    }
+}
+
+NeneTaskServer::~NeneTaskServer() {
+    request_stop_all();
+}
+
+NeneTaskHandle NeneTaskServer::submit(std::string name, Worker worker,
+                                      MainThreadCommit commit) {
+    if (!worker) {
+        throw std::runtime_error("NeneTaskServer::submit: worker is empty");
+    }
+
+    auto state = std::make_shared<NeneTaskState>();
+    {
+        std::lock_guard<std::mutex> state_lock(state->mutex);
+        state->name = std::move(name);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_) {
+            throw std::runtime_error("NeneTaskServer::submit: task server is stopping");
+        }
+        {
+            std::lock_guard<std::mutex> state_lock(state->mutex);
+            state->id = next_id_++;
+            state->status = NeneTaskStatus::Queued;
+            state->progress = 0.0f;
+        }
+        queued_.push_back(Job{
+            state,
+            std::move(worker),
+            std::move(commit),
+        });
+    }
+
+    cv_.notify_one();
+    return NeneTaskHandle(state);
+}
+
+void NeneTaskServer::worker_loop_(std::stop_token stop_token) {
+    while (true) {
+        Job job;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock, [this] {
+                return stopping_ || !queued_.empty();
+            });
+            if ((stopping_ || stop_token.stop_requested()) && queued_.empty()) {
+                return;
+            }
+            job = std::move(queued_.front());
+            queued_.pop_front();
+            ++running_count_;
+        }
+
+        bool enqueue_commit = false;
+        {
+            std::lock_guard<std::mutex> state_lock(job.state->mutex);
+            if (job.state->cancel_requested || stop_token.stop_requested()) {
+                job.state->status = NeneTaskStatus::Canceled;
+                job.state->progress = 1.0f;
+                job.state->message = "canceled";
+            } else {
+                job.state->status = NeneTaskStatus::Running;
+            }
+        }
+
+        try {
+            if (!should_cancel_(job.state)) {
+                NeneTaskContext ctx(stop_token, job.state);
+                job.worker(ctx);
+                ctx.throw_if_stop_requested();
+            }
+
+            if (should_cancel_(job.state)) {
+                mark_canceled_(job.state);
+            } else if (job.commit) {
+                mark_waiting_commit_(job.state);
+                enqueue_commit = true;
+            } else {
+                mark_succeeded_(job.state);
+            }
+        } catch (const NeneTaskCanceled&) {
+            mark_canceled_(job.state);
+        } catch (const std::exception& e) {
+            mark_failed_(job.state, e.what());
+        } catch (...) {
+            mark_failed_(job.state, "unknown exception");
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (running_count_ > 0) --running_count_;
+            if (enqueue_commit) {
+                ready_.push_back(std::move(job));
+            }
+        }
+        finished_cv_.notify_all();
+    }
+}
+
+std::size_t NeneTaskServer::pump_main_thread(double budget_ms) {
+    if (!SDL_IsMainThread()) {
+        throw std::runtime_error("NeneTaskServer::pump_main_thread: must be called on the main thread");
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    std::size_t committed = 0;
+
+    while (true) {
+        if (committed > 0 && budget_ms >= 0.0) {
+            const auto now = std::chrono::steady_clock::now();
+            const double elapsed_ms =
+                std::chrono::duration<double, std::milli>(now - start).count();
+            if (elapsed_ms >= budget_ms) break;
+        }
+
+        Job job;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (ready_.empty()) break;
+            job = std::move(ready_.front());
+            ready_.pop_front();
+        }
+
+        if (should_cancel_(job.state)) {
+            mark_canceled_(job.state);
+        } else {
+            try {
+                if (job.commit) job.commit();
+                mark_succeeded_(job.state);
+            } catch (const NeneTaskCanceled&) {
+                mark_canceled_(job.state);
+            } catch (const std::exception& e) {
+                mark_failed_(job.state, e.what());
+            } catch (...) {
+                mark_failed_(job.state, "unknown exception");
+            }
+        }
+
+        ++committed;
+        finished_cv_.notify_all();
+    }
+
+    return committed;
+}
+
+void NeneTaskServer::request_stop_all() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopping_ = true;
+        for (auto& job : queued_) mark_canceled_(job.state);
+        for (auto& job : ready_) mark_canceled_(job.state);
+        queued_.clear();
+        ready_.clear();
+    }
+    for (auto& worker : workers_) worker.request_stop();
+    cv_.notify_all();
+    finished_cv_.notify_all();
+}
+
+void NeneTaskServer::wait_worker_idle() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    finished_cv_.wait(lock, [this] {
+        return queued_.empty() && running_count_ == 0;
+    });
+}
+
+std::size_t NeneTaskServer::queued_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return queued_.size();
+}
+
+std::size_t NeneTaskServer::running_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return running_count_;
+}
+
+std::size_t NeneTaskServer::ready_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return ready_.size();
+}
+
+std::size_t NeneTaskServer::unfinished_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return queued_.size() + running_count_ + ready_.size();
+}
+
+void NeneTaskServer::mark_canceled_(const std::shared_ptr<NeneTaskState>& state) {
+    if (!state) return;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->cancel_requested = true;
+    state->status = NeneTaskStatus::Canceled;
+    state->progress = 1.0f;
+    if (state->message.empty()) state->message = "canceled";
+}
+
+void NeneTaskServer::mark_failed_(const std::shared_ptr<NeneTaskState>& state,
+                                  std::string error) {
+    if (!state) return;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->status = NeneTaskStatus::Failed;
+    state->progress = 1.0f;
+    state->error = std::move(error);
+}
+
+void NeneTaskServer::mark_succeeded_(const std::shared_ptr<NeneTaskState>& state) {
+    if (!state) return;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->status = NeneTaskStatus::Succeeded;
+    state->progress = 1.0f;
+}
+
+void NeneTaskServer::mark_waiting_commit_(const std::shared_ptr<NeneTaskState>& state) {
+    if (!state) return;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->status = NeneTaskStatus::WaitingCommit;
+    state->progress = std::max(state->progress, 0.95f);
+}
+
+bool NeneTaskServer::should_cancel_(const std::shared_ptr<NeneTaskState>& state) const {
+    if (!state) return true;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_) return true;
+    }
+    std::lock_guard<std::mutex> lock(state->mutex);
+    return state->cancel_requested;
+}
+
+NeneTaskGroup::~NeneTaskGroup() {
+    cancel_all();
+}
+
+void NeneTaskGroup::add(NeneTaskHandle handle) {
+    if (handle.valid()) handles_.push_back(std::move(handle));
+}
+
+void NeneTaskGroup::clear() {
+    handles_.clear();
+}
+
+void NeneTaskGroup::cancel_all() {
+    for (const auto& handle : handles_) handle.cancel();
+}
+
+bool NeneTaskGroup::all_done() const {
+    for (const auto& handle : handles_) {
+        if (!handle.done()) return false;
+    }
+    return true;
+}
+
+bool NeneTaskGroup::any_failed() const {
+    for (const auto& handle : handles_) {
+        if (handle.failed()) return true;
+    }
+    return false;
+}
+
+bool NeneTaskGroup::all_succeeded() const {
+    for (const auto& handle : handles_) {
+        if (!handle.succeeded()) return false;
+    }
+    return true;
+}
+
+float NeneTaskGroup::progress() const {
+    if (handles_.empty()) return 1.0f;
+    float sum = 0.0f;
+    for (const auto& handle : handles_) sum += handle.progress();
+    return sum / static_cast<float>(handles_.size());
+}
+
+std::string NeneTaskGroup::first_error() const {
+    for (const auto& handle : handles_) {
+        const std::string error = handle.error();
+        if (!error.empty()) return error;
+    }
+    return "";
+}
+
 // NeneSaveWriter
 NeneSaveWriter::NeneSaveWriter(NeneSaveNodeRecord& record)
     : record_(&record) {}
@@ -885,10 +1305,13 @@ NeneSoundLoader::~NeneSoundLoader() {
         bgm_track_ = nullptr;
     }
 
-    for (auto& [path, audio] : cache_) {
-        if (audio) MIX_DestroyAudio(audio);
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex_);
+        for (auto& [path, audio] : cache_) {
+            if (audio) MIX_DestroyAudio(audio);
+        }
+        cache_.clear();
     }
-    cache_.clear();
 
     if (mixer_) {
         MIX_DestroyMixer(mixer_);
@@ -991,10 +1414,20 @@ void NeneSoundLoader::set_bgm_volume(float volume) {
 }
 
 MIX_Audio* NeneSoundLoader::get_audio_(const std::string& path) {
-    auto it = cache_.find(path);
-    if (it != cache_.end()) return it->second;
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex_);
+        auto it = cache_.find(path);
+        if (it != cache_.end()) return it->second;
+    }
+
     MIX_Audio* audio = load_audio_(path);
-    cache_.emplace(path, audio);
+
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    auto [it, inserted] = cache_.emplace(path, audio);
+    if (!inserted) {
+        if (audio) MIX_DestroyAudio(audio);
+        return it->second;
+    }
     return audio;
 }
 

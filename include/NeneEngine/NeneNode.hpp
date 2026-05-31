@@ -37,6 +37,7 @@ public:
     int  get_render_z() const { return render_z; }
     void set_save_service(std::shared_ptr<NeneSaveService> service);
     std::shared_ptr<NeneSaveService> get_save_service() const { return save_service; }
+    std::shared_ptr<NeneTaskServer> get_task_server() const { return task_server; }
     void save_subtree(NeneSaveDocument& doc, std::string_view path = "") const;
     void load_subtree(const NeneSaveDocument& doc, std::string_view path = "");
 protected:
@@ -62,6 +63,7 @@ protected:
     std::shared_ptr<NeneFontLoader> font_loader;
     std::shared_ptr<NeneSoundLoader> sound_loader;
     std::shared_ptr<PathService> path_service;
+    std::shared_ptr<NeneTaskServer> task_server;
     std::shared_ptr<NeneSaveService> save_service;
     std::shared_ptr<NeneBlackboard> blackboard;
     std::shared_ptr<NeneCollisionWorld> collision_world;
@@ -131,6 +133,9 @@ public:
     void set_blackboard_settings_slot(std::string slot_name) {
         blackboard_settings_slot_ = std::move(slot_name);
     }
+    void set_task_commit_budget_ms(double budget_ms) {
+        task_commit_budget_ms_ = budget_ms;
+    }
     void save_blackboard_settings_to_slot(std::string_view slot_name = "_settings") const;
     bool load_blackboard_settings_from_slot(std::string_view slot_name = "_settings");
 private:
@@ -142,6 +147,7 @@ private:
     bool tree_built = false;
     bool auto_blackboard_settings_ = true;
     std::string blackboard_settings_slot_ = "_settings";
+    double task_commit_budget_ms_ = 2.0;
     void apply_blackboard_window_settings_();
 };
 
