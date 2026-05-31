@@ -38,7 +38,6 @@
 
 
 ## TODO
-- ローディング画面(起動時, シーン遷移時)
 - アニメーション実装のサポート -> NeneAnimatorの設計・実装
 - 汎用ステートマシンの活用 -> NeneStateMachine
 - SuperChromeDino
