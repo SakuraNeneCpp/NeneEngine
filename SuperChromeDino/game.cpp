@@ -31,15 +31,8 @@ static constexpr const char* kFlagPaused = "paused";
 static constexpr const char* kGameFontPath = "assets/fonts/NotoSansJP-Regular.ttf";
 static constexpr const char* kSpriteSheetPath = "assets/sprites/sprite.png";
 static constexpr const char* kSplashImagePath = "assets/splashscreen.png";
-static constexpr const char* kSeCursorMovePath =
-    "assets/se/soundeffect-lab/"
-    "\xE3\x82\xAB\xE3\x83\xBC\xE3\x82\xBD\xE3\x83\xAB\xE7\xA7\xBB\xE5\x8B\x95"
-    "1.mp3";
-static constexpr const char* kSeConfirmPath =
-    "assets/se/soundeffect-lab/"
-    "\xE6\xB1\xBA\xE5\xAE\x9A\xE3\x83\x9C\xE3\x82\xBF\xE3\x83\xB3"
-    "\xE3\x82\x92\xE6\x8A\xBC\xE3\x81\x99"
-    "1.mp3";
+static constexpr const char* kSeCursorMovePath = "assets/se/soundeffect-lab/cursor_move.mp3";
+static constexpr const char* kSeConfirmPath = "assets/se/soundeffect-lab/confirm.mp3";
 static constexpr const char* kSeDinoJumpPath = "assets/se/fc_sitefactory/se_jump_001.wav";
 static constexpr const char* kStageBgmPaths[kStageCount] = {
     "assets/bgm/maou/maou_bgm_8bit17.mp3",
