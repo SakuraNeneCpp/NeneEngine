@@ -28,6 +28,7 @@ static constexpr const char* kSettingBgmVolume = "bgm_volume";
 static constexpr const char* kSettingCursorVisible = "cursor_visible";
 static constexpr const char* kSettingDinoControl = "dino_control";
 static constexpr const char* kFlagPaused = "paused";
+static constexpr const char* kRunDistanceScore = "run_distance_score";
 static constexpr const char* kGameFontPath = "assets/fonts/NotoSansJP-Regular.ttf";
 static constexpr const char* kSpriteSheetPath = "assets/sprites/sprite.png";
 static constexpr const char* kSplashImagePath = "assets/splashscreen.png";
@@ -732,7 +733,6 @@ protected:
         x_ -= speed * dt;
         if (knocked_down_) {
             knock_angle_ = std::min(90.0f, knock_angle_ + knock_rotation_speed_ * dt);
-            x_ -= knock_slide_speed_ * dt;
         }
         if (collision_world && collider_id_ != 0) {
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
@@ -793,7 +793,6 @@ private:
     bool winning_run_ = false;
     bool knocked_down_ = false;
     float knock_angle_ = 0.0f;
-    float knock_slide_speed_ = 140.0f;
     float knock_rotation_speed_ = 360.0f;
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 };
@@ -1073,21 +1072,23 @@ protected:
             const bool dash = input_server && input_server->is_down("dash");
             const int move_dir = (move_right ? 1 : 0) - (move_left ? 1 : 0);
             const float dash_mul = dash ? 1.8f : 1.0f;
-            float speed = static_cast<float>(move_dir) * blackboard->scroll_speed * dash_mul;
-            if (is_winning_run_stage(blackboard.get())) {
-                float run_mul = move_right ? 1.35f : 1.0f;
-                if (move_left && !move_right) run_mul = 0.55f;
-                speed = blackboard->scroll_speed * run_mul * dash_mul;
-            }
+            const float speed = static_cast<float>(move_dir) * blackboard->scroll_speed * dash_mul;
             blackboard->setf("world_scroll_speed", speed);
+            float& run_distance_score = blackboard->ensuref(kRunDistanceScore, 0.0f);
             float& score = blackboard->ensuref("score", 0.0f);
-            if (speed > 0.0f) score += dt * 100.0f; // 右へ進んだ時間を得点化
-            if (score >= kStageClearScore && blackboard->getf("stage_clear", 0.0f) < 0.5f) {
+            const bool already_clear = blackboard->getf("stage_clear", 0.0f) > 0.5f;
+            if (!already_clear && blackboard->scroll_speed > 0.0f) {
+                run_distance_score += speed * dt * (100.0f / blackboard->scroll_speed);
+                if (run_distance_score > score) score = run_distance_score;
+            }
+            if (!already_clear && score >= kStageClearScore) {
                 score = kStageClearScore;
                 blackboard->setf("stage_clear", 1.0f);
-                blackboard->setf("world_scroll_speed", 0.0f);
-                this->valve_time_lapse = false;
-                this->valve_sdl_event = false;
+                if (!is_winning_run_stage(blackboard.get())) {
+                    blackboard->setf("world_scroll_speed", 0.0f);
+                    this->valve_time_lapse = false;
+                    this->valve_sdl_event = false;
+                }
                 send_mail(NeneMail(this->name, "stage_cleared", ""));
             }
         }
@@ -1137,9 +1138,9 @@ protected:
     }
     void handle_time_lapse(const float& dt) override {
         if (!blackboard) return;
-        // スコア表示更新（score が変化したときだけテクスチャ更新）
+        // スコア表示更新（最大到達距離が伸びたときだけテクスチャ更新）
         const int score_i = static_cast<int>(blackboard->getf("score", 0.0f));
-        if (score_i != last_score_int_) {
+        if (score_i > last_score_int_) {
             last_score_int_ = score_i;
             update_score_texture_(score_i);
         }
@@ -1267,6 +1268,7 @@ protected:
         if (blackboard) {
             blackboard->setf("selected_stage", static_cast<float>(stage_));
             blackboard->setf("score", 0.0f);
+            blackboard->setf(kRunDistanceScore, 0.0f);
             blackboard->setf("game_over", 0.0f);
             blackboard->setf("stage_clear", 0.0f);
             blackboard->setf(kFlagPaused, 0.0f);

@@ -44,7 +44,6 @@
 - 汎用ステートマシンの活用 -> NeneStateMachine
 - SuperChromeDino
     - 設定: バックグラウンド実行 ON/OFF
-    - ステージ3: 勝手に走るな. 倒されたサボテンのスクロール速度が変. クリア後も背景を凍結しないようにする.
 
 ### Demo
 - アクション(ゲーム制作の基本) 「SuperChromeDino」
