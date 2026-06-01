@@ -36,19 +36,6 @@
 - NeneUtilities.hpp  
     便利な関数. 計算だけする. 今は何もない
 
-## NeneNodeGallery
-ノードのテンプレートなどをまとめたHTML.
-
-[NeneNodeGallery](./NeneNodeGallery/main.html)
-
-↑ ソースコードが開く. ブラウザで表示してほしいのに...
-
-## リリースノート
-
-### ver. 1.0.0
-- SuperChromeDino完成まで
-ここで一旦スカッシュして, リファレンス生成
-
 
 ## TODO
 - AGENTS.mdのgit commitのルールをAIと相談して決める.
@@ -57,7 +44,6 @@
 - 汎用ステートマシンの活用 -> NeneStateMachine
 - SuperChromeDino
     - 設定: バックグラウンド実行 ON/OFF
-    - ステージ2: プテラノドンの速度がDinoの速度に応じて変化している問題
     - ステージ3: 勝手に走るな. 倒されたサボテンのスクロール速度が変. クリア後も背景を凍結しないようにする.
 
 ### Demo
