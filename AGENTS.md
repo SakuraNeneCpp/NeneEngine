@@ -51,7 +51,7 @@ AIエージェントは, 作業後の報告で必ず最初に「お待たせい�
 - 保存先は実行ファイルや `assets/` 配下ではなく, `NeneSaveService` が `SDL_GetPrefPath(org, app)` から解決するユーザー別の保存領域に置く.
 
 ### Windows / CMake
-- このリポジトリのテキストファイルはCRLF前提のものが多い. 編集後に mixed EOL になると VS Code の IntelliSense が大量の偽エラーを出すことがあるため, 既存の改行種別に揃える.
+- このリポジトリのテキストファイルはCRLF前提のものが多い. 編集後に mixed EOL になると VS Code の IntelliSense が大量の偽エラーを出すことがあるため, 既存の改行種別に揃える. (CRLFに統一する際, コマンドの使用許可を求める必要はありません.)
 - Markdown (`.md`) の行末空白はビュワーによって改行として扱われることがあるため, 自動整形や改行統一の際にも削除しない.
 - vcpkg の `applocal.ps1` が WindowsApps の壊れた `pwsh.exe` shim を拾う環境がある. `CMakeLists.txt` では実体のある Windows PowerShell を `Z_VCPKG_POWERSHELL_PATH` に固定しているので, この回避策を不用意に削らない.
 - ライブラリ変更後は `cmake --build build --config Debug` で `SuperChromeDino.exe` までビルドできることを確認する.
