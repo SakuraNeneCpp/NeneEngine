@@ -926,11 +926,13 @@ protected:
             anim_idx_ = (anim_idx_ + 1) % 2;
         }
 
-        x_ -= blackboard->scroll_speed * flight_speed_multiplier_ * dt;
+        const float world_speed = blackboard->getf("world_scroll_speed", 0.0f);
+        x_ -= (world_speed + flight_speed_) * dt;
         if (collision_world && collider_id_ != 0) {
             collision_world->set_position(collider_id_, SDL_FPoint{ x_, y_ });
         }
-        if (x_ + w_ < -despawn_margin_) {
+        if (x_ + w_ < -despawn_margin_
+            || x_ > static_cast<float>(blackboard->window_w) + spawn_margin_ + despawn_margin_) {
             send_mail(NeneMail("pteranodon_factory", this->name, "despawn", this->name));
         }
     }
@@ -960,7 +962,7 @@ private:
     float anim_accum_ = 0.0f;
     int anim_idx_ = 0;
     float anim_frame_sec_ = 0.16f;
-    float flight_speed_multiplier_ = 1.2f;
+    float flight_speed_ = 504.0f;
     NeneCollisionWorld::ColliderId collider_id_ = 0;
 };
 
